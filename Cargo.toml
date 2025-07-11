@@ -11,7 +11,7 @@ homepage = "https://github.com/MKJSM/log-args"
 repository = "https://github.com/MKJSM/log-args"
 rust-version = "1.65"
 keywords = ["logging", "tracing", "macro", "proc-macro", "arguments"]
-categories = ["development-tools::debugging", "macros"]
+categories = ["development-tools::debugging", "development-tools::procedural-macro-helpers"]
 
 [lib]
 proc-macro = true
