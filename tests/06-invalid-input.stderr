@@ -1,0 +1,5 @@
+error: Unknown attribute, expected `fields` or `custom`
+  --> tests/06-invalid-input.rs:10:12
+   |
+10 | #[log_args(field(user.id))]
+   |            ^^^^^

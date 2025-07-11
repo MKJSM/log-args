@@ -1,0 +1,67 @@
+[package]
+name = "log_args-tests"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies.futures]
+version = "0.3.31"
+default-features = true
+
+[dependencies.log_args]
+path = "/home/jayasuriya/workspace/log-args/log_args/"
+default-features = false
+
+[dependencies.proc-macro2]
+version = "1"
+default-features = true
+
+[dependencies.quote]
+version = "1"
+default-features = true
+
+[dependencies.syn]
+version = "2"
+features = ["full"]
+
+[dependencies.tracing]
+version = "0.1"
+default-features = true
+
+[dependencies.tracing-subscriber]
+version = "0.3.19"
+default-features = true
+
+[[bin]]
+name = "log_args-tests"
+path = "main.rs"
+
+[[bin]]
+name = "trybuild000"
+path = "/home/jayasuriya/workspace/log-args/log_args/tests/01-all-args.rs"
+
+[[bin]]
+name = "trybuild001"
+path = "/home/jayasuriya/workspace/log-args/log_args/tests/02-selected-fields.rs"
+
+[[bin]]
+name = "trybuild002"
+path = "/home/jayasuriya/workspace/log-args/log_args/tests/03-subfield-logging.rs"
+
+[[bin]]
+name = "trybuild003"
+path = "/home/jayasuriya/workspace/log-args/log_args/tests/04-custom-fields.rs"
+
+[[bin]]
+name = "trybuild004"
+path = "/home/jayasuriya/workspace/log-args/log_args/tests/05-async-fn.rs"
+
+[[bin]]
+name = "trybuild005"
+path = "/home/jayasuriya/workspace/log-args/log_args/tests/07-all-log-levels.rs"
+
+[[bin]]
+name = "trybuild006"
+path = "/home/jayasuriya/workspace/log-args/log_args/tests/06-invalid-input.rs"
+
+[workspace]

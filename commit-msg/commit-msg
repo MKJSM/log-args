@@ -1,0 +1,3 @@
+HOOK_DIR="$(dirname "$0")"
+EXECUTABLE="$HOOK_DIR/../../commit-msg/msg_validate"
+exec "$EXECUTABLE" "$1"

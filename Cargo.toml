@@ -1,0 +1,37 @@
+[package]
+name = "log_args"
+version = "0.1.0"
+edition = "2021"
+autotests = false
+authors = ["JS <mkjsm57@gmail.com>"]
+description = "A simple procedural macro to log function arguments using the tracing crate."
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+homepage = "https://github.com/MKJSM/log-args"
+repository = "https://github.com/MKJSM/log-args"
+rust-version = "1.65"
+keywords = ["logging", "tracing", "macro", "proc-macro", "arguments"]
+categories = ["development-tools::debugging", "macros"]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2.0.104", features = ["full"] }
+quote = "1.0.40"
+proc-macro2 = "1.0.95"
+
+[dev-dependencies]
+trybuild = "1.0.106"
+tracing = "0.1.41"
+tracing-subscriber = "0.3.19"
+futures = "0.3.31"
+
+[[example]]
+name = "demo"
+path = "examples/main.rs"
+
+[[test]]
+name = "trybuild"
+path = "tests/trybuild.rs"
+harness = true
