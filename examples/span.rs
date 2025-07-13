@@ -2,6 +2,11 @@ use log_args::params;
 use tracing::info;
 use tracing_subscriber;
 
+use std::cell::RefCell;
+thread_local! {
+    static __PARENT_LOG_ARGS: RefCell<Option<String>> = RefCell::new(None);
+}
+
 fn main() {
     tracing_subscriber::fmt().init();
     my_function(123);
@@ -21,6 +26,6 @@ fn sub_function() {
 
 #[params]
 fn my_function2(arg1: i32) {
-    info!("Inside my_function");
+    info!("Inside my_function2");
     sub_function();
 }
