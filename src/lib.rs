@@ -243,53 +243,74 @@ pub fn params(args: TokenStream, input: TokenStream) -> TokenStream {
     };
 
     let injected_code = {
+        let custom_keys: Vec<_> = params.custom.iter().map(|(k, _)| k).collect();
+        let custom_values: Vec<_> = params.custom.iter().map(|(_, v)| v).collect();
         quote! {
             #arg_fmt
-            let __log_args_final = if __log_args_str.is_empty() { log_args_runtime::__PARENT_LOG_ARGS.with(|slot| slot.borrow().clone()).unwrap_or_default() } else { __log_args_str.clone() };
-
             #[allow(unused_macros)]
             macro_rules! info {
-                ($($t:tt)*) => {
-                    if __log_args_final.is_empty() {
-                        tracing::info!("{}: {}", #pascal_fn_name, format_args!($($t)*));
-                    } else {
-                        tracing::info!("{}: {} {}", #pascal_fn_name, format_args!($($t)*), __log_args_final);
-                    }
+                ($msg:literal $(, $args:expr)*) => {
+                    tracing::info!(
+                        function = #pascal_fn_name,
+                        #(
+                            #custom_keys = #custom_values,
+                        )*
+                        #(
+                            #fields_to_log = ?#fields_to_log,
+                        )*
+                        $msg $(, $args)*
+                    );
                 };
             }
             #[allow(unused_macros)]
             macro_rules! warn {
-                ($($t:tt)*) => {
-                    if __log_args_final.is_empty() {
-                        tracing::warn!("{}: {}", #pascal_fn_name, format_args!($($t)*));
-                    } else {
-                        tracing::warn!("{}: {} {}", #pascal_fn_name, format_args!($($t)*), __log_args_final);
-                    }
+                ($msg:literal $(, $args:expr)*) => {
+                    tracing::warn!(
+                        function = #pascal_fn_name,
+                        #(
+                            #custom_keys = #custom_values,
+                        )*
+                        #(
+                            #fields_to_log = ?#fields_to_log,
+                        )*
+                        $msg $(, $args)*
+                    );
                 };
             }
             #[allow(unused_macros)]
             macro_rules! error {
-                ($($t:tt)*) => {
-                    if __log_args_final.is_empty() {
-                        tracing::error!("{}: {}", #pascal_fn_name, format_args!($($t)*));
-                    } else {
-                        tracing::error!("{}: {} {}", #pascal_fn_name, format_args!($($t)*), __log_args_final);
-                    }
+                ($msg:literal $(, $args:expr)*) => {
+                    tracing::error!(
+                        function = #pascal_fn_name,
+                        #(
+                            #custom_keys = #custom_values,
+                        )*
+                        #(
+                            #fields_to_log = ?#fields_to_log,
+                        )*
+                        $msg $(, $args)*
+                    );
                 };
             }
             #[allow(unused_macros)]
             macro_rules! debug {
-                ($($t:tt)*) => {
-                    if __log_args_final.is_empty() {
-                        tracing::debug!("{}: {}", #pascal_fn_name, format_args!($($t)*));
-                    } else {
-                        tracing::debug!("{}: {} {}", #pascal_fn_name, format_args!($($t)*), __log_args_final);
-                    }
+                ($msg:literal $(, $args:expr)*) => {
+                    tracing::debug!(
+                        function = #pascal_fn_name,
+                        #(
+                            #custom_keys = #custom_values,
+                        )*
+                        #(
+                            #fields_to_log = ?#fields_to_log,
+                        )*
+                        $msg $(, $args)*
+                    );
                 };
             }
             #span_code
         }
     };
+
 
     func.block = if span_enabled {
         Box::new(syn::parse_quote!({
