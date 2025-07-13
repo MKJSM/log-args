@@ -80,19 +80,24 @@ impl Parse for Params {
             } else if meta.path().is_ident("level") {
                 if let Meta::NameValue(nv) = meta {
                     if let syn::Expr::Lit(expr_lit) = &nv.value {
-    if let syn::Lit::Str(lit_str) = &expr_lit.lit {
-                        level = Some(lit_str.value());
+                        if let syn::Lit::Str(lit_str) = &expr_lit.lit {
+                            level = Some(lit_str.value());
+                        } else {
+                            return Err(input.error("Expected string value for `level` attribute, e.g., level = \"info\""));
+                        }
                     } else {
-                        return Err(input.error("Expected string value for `level` attribute, e.g., level = \"info\""));
+                        return Err(input.error(
+                            "Expected string literal for `level` attribute, e.g., level = \"info\"",
+                        ));
                     }
                 } else {
-                    return Err(input.error("Expected string literal for `level` attribute, e.g., level = \"info\""));
-                }
-                } else {
-                    return Err(input.error("Expected `level = \"info\"` or similar for `level` attribute"));
+                    return Err(
+                        input.error("Expected `level = \"info\"` or similar for `level` attribute")
+                    );
                 }
             } else {
-                return Err(input.error("Unknown attribute, expected `fields`, `custom`, `span` or `level`"));
+                return Err(input
+                    .error("Unknown attribute, expected `fields`, `custom`, `span` or `level`"));
             }
         }
 
@@ -173,117 +178,112 @@ pub fn params(args: TokenStream, input: TokenStream) -> TokenStream {
         }
     }
 
-    let log_fields: Vec<_> = fields_to_log
-        .iter()
-        .map(|field| {
+    let orig_block = func.block;
+
+    let arg_fmt = if !fields_to_log.is_empty() {
+        let fmt = fields_to_log.iter().map(|field| {
             let field_str = field.to_string().replace(' ', "");
-            let key = syn::Ident::new(&field_str.replace('.', "_"), proc_macro2::Span::call_site());
-            quote! { #key = ?#field }
-        })
-        .collect();
-
-    let custom_fields: Vec<_> = params
-        .custom
-        .iter()
-        .map(|nv| {
-            let key = &nv.path;
-            let val = &nv.value;
-            quote! { #key = #val }
-        })
-        .collect();
-
-    let stmts = &func.block.stmts;
-
-    let tracing_block = if params.span.unwrap_or(false) {
-        let field_assignments = params.fields.iter().map(|f| {
-            let ident = match f {
-                syn::Expr::Path(expr_path) => {
-                    expr_path.path.get_ident().expect("Expected identifier")
-                }
-                _ => panic!("Expected identifier for field"),
-            };
-            quote! { #ident = #ident }
-        });
-        quote! {
-            let span = tracing::span!(tracing::Level::INFO, "", #(#log_fields,)* #(#custom_fields,)*);
-            let _enter = span.enter();
-            {
-                #[allow(unused_macros)]
-                {
-                    macro_rules! info {
-                        ($msg:expr) => {
-                            tracing::info!($msg);
-                        };
-                        ($msg:expr, $($t:tt)*) => {
-                            tracing::info!($msg, $($t)*);
-                        };
-                    }
-                    macro_rules! warn {
-                        ($msg:expr) => {
-                            tracing::warn!($msg);
-                        };
-                        ($msg:expr, $($t:tt)*) => {
-                            tracing::warn!($msg, $($t)*);
-                        };
-                    }
-                    macro_rules! error {
-                        ($msg:expr) => {
-                            tracing::error!($msg);
-                        };
-                        ($msg:expr, $($t:tt)*) => {
-                            tracing::error!($msg, $($t)*);
-                        };
-                    }
-                    macro_rules! debug {
-                        ($msg:expr) => {
-                            tracing::debug!($msg);
-                        };
-                        ($msg:expr, $($t:tt)*) => {
-                            tracing::debug!($msg, $($t)*);
-                        };
-                    }
-
-                    #(#stmts)*
-                }
+            let key = field_str.replace('.', "_");
+            quote! {
+                format!("{}={:?}", #key, #field)
             }
+        });
+        quote! { let __log_args_str = vec![#(#fmt),*].join(" "); }
+    } else {
+        quote! { let __log_args_str = String::new(); }
+    };
+
+    let span_code = if params.span.unwrap_or(false) {
+        // Always create a span with all argument fields at the start of the function
+        quote! {
+            let __span = tracing::span!(tracing::Level::INFO, "", #(#fields_to_log),*);
+            let __enter = __span.enter();
         }
     } else {
-        quote! {
-            {
-                #[allow(unused_macros)]
-                {
-                    macro_rules! info {
-                        ($($t:tt)*) => {
-                            tracing::info!(#(#log_fields,)* #(#custom_fields,)* $($t)*)
-                        };
-                    }
-                    macro_rules! warn {
-                        ($($t:tt)*) => {
-                            tracing::warn!(#(#log_fields,)* #(#custom_fields,)* $($t)*)
-                        };
-                    }
-                    macro_rules! error {
-                        ($($t:tt)*) => {
-                            tracing::error!(#(#log_fields,)* #(#custom_fields,)* $($t)*)
-                        };
-                    }
-                    macro_rules! debug {
-                        ($($t:tt)*) => {
-                            tracing::debug!(#(#log_fields,)* #(#custom_fields,)* $($t)*)
-                        };
-                    }
+        quote! {}
+    };
 
-                    #(#stmts)*
-                }
+    let injected_code = {
+        let span_block = if params.span.unwrap_or(false) {
+            quote! { #span_code }
+        } else {
+            quote! {}
+        };
+        quote! {
+            #span_block
+            #arg_fmt
+            #[allow(unused_macros)]
+            macro_rules! info {
+                ($msg:expr) => {
+                    if __log_args_str.is_empty() {
+                        tracing::info!(concat!("{}"), $msg);
+                    } else {
+                        tracing::info!(concat!("{} {}"), $msg, __log_args_str);
+                    }
+                };
+                ($msg:expr, $($t:tt)*) => {
+                    if __log_args_str.is_empty() {
+                        tracing::info!(concat!("{}"), $msg, $($t)*);
+                    } else {
+                        tracing::info!(concat!("{} {}"), $msg, __log_args_str, $($t)*);
+                    }
+                };
+            }
+            macro_rules! warn {
+                ($msg:expr) => {
+                    if __log_args_str.is_empty() {
+                        tracing::warn!(concat!("{}"), $msg);
+                    } else {
+                        tracing::warn!(concat!("{} {}"), $msg, __log_args_str);
+                    }
+                };
+                ($msg:expr, $($t:tt)*) => {
+                    if __log_args_str.is_empty() {
+                        tracing::warn!(concat!("{}"), $msg, $($t)*);
+                    } else {
+                        tracing::warn!(concat!("{} {}"), $msg, __log_args_str, $($t)*);
+                    }
+                };
+            }
+            macro_rules! error {
+                ($msg:expr) => {
+                    if __log_args_str.is_empty() {
+                        tracing::error!(concat!("{}"), $msg);
+                    } else {
+                        tracing::error!(concat!("{} {}"), $msg, __log_args_str);
+                    }
+                };
+                ($msg:expr, $($t:tt)*) => {
+                    if __log_args_str.is_empty() {
+                        tracing::error!(concat!("{}"), $msg, $($t)*);
+                    } else {
+                        tracing::error!(concat!("{} {}"), $msg, __log_args_str, $($t)*);
+                    }
+                };
+            }
+            macro_rules! debug {
+                ($msg:expr) => {
+                    if __log_args_str.is_empty() {
+                        tracing::debug!(concat!("{}"), $msg);
+                    } else {
+                        tracing::debug!(concat!("{} {}"), $msg, __log_args_str);
+                    }
+                };
+                ($msg:expr, $($t:tt)*) => {
+                    if __log_args_str.is_empty() {
+                        tracing::debug!(concat!("{}"), $msg, $($t)*);
+                    } else {
+                        tracing::debug!(concat!("{} {}"), $msg, __log_args_str, $($t)*);
+                    }
+                };
             }
         }
     };
 
-    func.block = parse_quote! {
-        {
-            #tracing_block
-        }
-    };
+    func.block = Box::new(syn::parse_quote!({
+        #injected_code
+        #orig_block
+    }));
 
     TokenStream::from(quote! { #func })
 }
