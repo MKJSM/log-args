@@ -1,0 +1,17 @@
+[package]
+name = "log-args-runtime"
+version = "0.1.0"
+edition = "2021"
+authors = ["JS <mkjsm57@gmail.com>"]
+description = "Runtime support crate for the log-args procedural macro. Provides thread-local context management for structured logging."
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+homepage = "https://github.com/MKJSM/log-args"
+repository = "https://github.com/MKJSM/log-args"
+rust-version = "1.65"
+keywords = ["logging", "tracing", "macro", "runtime"]
+categories = ["development-tools::debugging"]
+
+[lib]
+name = "log_args_runtime"
+path = "src/lib.rs"

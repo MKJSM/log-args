@@ -21,6 +21,7 @@
 
 extern crate proc_macro;
 
+use log_args_runtime::__PARENT_LOG_ARGS;
 use proc_macro::TokenStream;
 use quote::{quote, ToTokens};
 use syn::parse::{Parse, ParseStream, Result};
@@ -78,8 +79,7 @@ impl Parse for Params {
                     return Err(input.error("Expected `span` or `span = true/false`"));
                 }
             } else {
-                return Err(input
-                    .error("Unknown attribute, expected `fields`, `custom`, or `span`"));
+                return Err(input.error("Unknown attribute, expected `fields`, `custom` or `span`"));
             }
         }
 
@@ -174,13 +174,23 @@ pub fn params(args: TokenStream, input: TokenStream) -> TokenStream {
         quote! { let __log_args_str = String::new(); }
     };
 
+    let fn_name_str = func.sig.ident.to_string();
+    // Convert snake_case to PascalCase for span name
+    let pascal_fn_name = fn_name_str
+        .split('_')
+        .map(|s| {
+            let mut c = s.chars();
+            match c.next() {
+                None => String::new(),
+                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+            }
+        })
+        .collect::<String>();
     let span_code = if params.span.unwrap_or(false) {
         // Set the thread-local only when entering a span
         quote! {
-            let __span = tracing::span!(tracing::Level::INFO, "");
-            let __enter = __span.enter();
             let __log_args_str_copy = __log_args_str.clone();
-            __PARENT_LOG_ARGS.with(|slot| {
+            log_args_runtime::__PARENT_LOG_ARGS.with(|slot| {
                 *slot.borrow_mut() = if __log_args_str_copy.is_empty() { None } else { Some(__log_args_str_copy) };
             });
         }
@@ -195,21 +205,21 @@ pub fn params(args: TokenStream, input: TokenStream) -> TokenStream {
         quote! {
 
             #arg_fmt
-            let __log_args_final = __PARENT_LOG_ARGS.with(|slot| slot.borrow().clone()).unwrap_or_else(|| __log_args_str.clone());
+            let __log_args_final = log_args_runtime::__PARENT_LOG_ARGS.with(|slot| slot.borrow().clone()).unwrap_or_else(|| __log_args_str.clone());
             #[allow(unused_macros)]
             macro_rules! info {
                 ($msg:expr) => {
                     if __log_args_final.is_empty() {
-                        tracing::info!(concat!("{}"), $msg);
+                        tracing::info!("{}: {}", #pascal_fn_name, $msg);
                     } else {
-                        tracing::info!(concat!("{} {}"), $msg, __log_args_final);
+                        tracing::info!("{}: {} {}", #pascal_fn_name, $msg, __log_args_final);
                     }
                 };
                 ($msg:expr, $($t:tt)*) => {
                     if __log_args_final.is_empty() {
-                        tracing::info!(concat!("{}"), $msg, $($t)*);
+                        tracing::info!(concat!("{}"), $msg, $($t)*); // unchanged, but check format
                     } else {
-                        tracing::info!(concat!("{} {}"), $msg, __log_args_final, $($t)*);
+                        tracing::info!(concat!("{} {}"), $msg, __log_args_final, $($t)*); // unchanged, but check format
                     }
                 };
             }
@@ -217,9 +227,9 @@ pub fn params(args: TokenStream, input: TokenStream) -> TokenStream {
             macro_rules! warn {
                 ($msg:expr) => {
                     if __log_args_final.is_empty() {
-                        tracing::warn!(concat!("{}"), $msg);
+                        tracing::warn!("{}: {}", #pascal_fn_name, $msg);
                     } else {
-                        tracing::warn!(concat!("{} {}"), $msg, __log_args_final);
+                        tracing::warn!("{}: {} {}", #pascal_fn_name, $msg, __log_args_final);
                     }
                 };
                 ($msg:expr, $($t:tt)*) => {
@@ -234,9 +244,9 @@ pub fn params(args: TokenStream, input: TokenStream) -> TokenStream {
             macro_rules! error {
                 ($msg:expr) => {
                     if __log_args_final.is_empty() {
-                        tracing::error!(concat!("{}"), $msg);
+                        tracing::error!("{}: {}", #pascal_fn_name, $msg);
                     } else {
-                        tracing::error!(concat!("{} {}"), $msg, __log_args_final);
+                        tracing::error!("{}: {} {}", #pascal_fn_name, $msg, __log_args_final);
                     }
                 };
                 ($msg:expr, $($t:tt)*) => {
@@ -251,9 +261,9 @@ pub fn params(args: TokenStream, input: TokenStream) -> TokenStream {
             macro_rules! debug {
                 ($msg:expr) => {
                     if __log_args_final.is_empty() {
-                        tracing::debug!(concat!("{}"), $msg);
+                        tracing::debug!("{}: {}", #pascal_fn_name, $msg);
                     } else {
-                        tracing::debug!(concat!("{} {}"), $msg, __log_args_final);
+                        tracing::debug!("{}: {} {}", #pascal_fn_name, $msg, __log_args_final);
                     }
                 };
                 ($msg:expr, $($t:tt)*) => {
