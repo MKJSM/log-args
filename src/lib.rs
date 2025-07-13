@@ -21,7 +21,7 @@
 
 extern crate proc_macro;
 
-use log_args_runtime::__PARENT_LOG_ARGS;
+
 use proc_macro::TokenStream;
 use quote::{quote, ToTokens};
 use syn::parse::{Parse, ParseStream, Result};
@@ -197,7 +197,7 @@ pub fn params(args: TokenStream, input: TokenStream) -> TokenStream {
     } else {
         // Clear thread-local if not entering a span
         quote! {
-            __PARENT_LOG_ARGS.with(|slot| *slot.borrow_mut() = None);
+            log_args_runtime::__PARENT_LOG_ARGS.with(|slot| *slot.borrow_mut() = None);
         }
     };
 

@@ -1,6 +1,5 @@
 use log_args::params;
 use tracing::info;
-use log_args_runtime::__PARENT_LOG_ARGS;
 use tracing_subscriber;
 
 fn main() {
