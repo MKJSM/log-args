@@ -9,10 +9,16 @@ clean:
     cargo clean
 
 run:
-    cargo run --example demo
+    cargo run --example log
+
+run-span:
+    cargo run --example span
 
 test:
     cargo test
+
+otest:
+    TRYBUILD=overwrite cargo test
 
 lint:
     cargo clippy

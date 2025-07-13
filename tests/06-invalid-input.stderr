@@ -1,5 +1,7 @@
-error: Unknown attribute, expected `fields` or `custom`
-  --> tests/06-invalid-input.rs:10:12
+error: unexpected end of input, Unknown attribute, expected `fields`, `custom` or `span`
+  --> tests/06-invalid-input.rs:10:1
    |
-10 | #[log_args(field(user.id))]
-   |            ^^^^^
+10 | #[params(field(user.id))]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the attribute macro `params` (in Nightly builds, run with -Z macro-backtrace for more info)
