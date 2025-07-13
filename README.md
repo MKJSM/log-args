@@ -57,7 +57,7 @@ fn process_user(user: User, task_id: i32) {
 Use `fields(...)` to select which arguments or subfields to log.
 
 ```rust
-use params::params;
+use log_args::params;
 use tracing::warn;
 
 #[derive(Debug)]
@@ -65,12 +65,45 @@ struct User { id: u32, name: String }
 
 #[params(fields(user.id))]
 fn process_user(user: User) {
-    warn!("Processing failed");
+    warn!("Warn about user");
+}
+// Output: WARN Warn about user user.id=42
+```
+
+### Using `span` for Structured, Hierarchical Logging
+
+The `span` attribute enables automatic creation of a [tracing span](https://docs.rs/tracing/latest/tracing/struct.Span.html) for the annotated function. All logs inside the function will be attached to this span, providing structured, hierarchical context in your logs.
+
+**How to use:**
+```rust
+#[params(span = true)]
+fn my_function(arg1: i32) {
+    debug!("Inside my_function");
+    sub_function();
 }
 
-// Log output will be similar to:
-// WARN Processing failed user_id=42
+#[params]
+fn sub_function() {
+    debug!("Inside sub_function");
+}
 ```
+
+**What this does:**
+- When `span = true` is set, entering the function creates a new tracing span named after the function (e.g., `my_function`).
+- All logs within the function are recorded within this span, including logs from called functions (if they also use `#[params(span = true)]`).
+- This is especially useful for async or concurrent code, where context propagation is important.
+
+**Example output:**
+```
+2025-07-13T07:23:50.707806Z DEBUG span: MyFunction: Inside my_function arg1=123
+2025-07-13T07:23:50.707831Z DEBUG span: SubFunction: Inside sub_function arg1=123
+```
+
+**Best practices:**
+- Use `span = true` for top-level or important functions to group related logs.
+- For deeply nested or performance-critical code, use selectively to avoid excessive span creation.
+
+---
 
 ### 3. Add Custom Key-Value Pairs
 
@@ -161,9 +194,18 @@ tracing::info!(
 );
 ```
 
-This makes logging consistent and easy to use without spans or boilerplate.
+**❌ Incorrect usage:**
+```rust
+#[params]
+fn foo() {
+    tracing::debug!("debug message"); // will NOT be enriched
+}
+```
 
----
+**Always import the macros you use:**
+```rust
+use tracing::{debug, info, warn, error};
+```
 
 ## ❗ Limitations
 
@@ -177,15 +219,15 @@ This makes logging consistent and easy to use without spans or boilerplate.
 
 This macro is tested using [`trybuild`](https://docs.rs/trybuild), covering the following:
 
-| Test Case                      | Description                                |
-| ------------------------------ | ------------------------------------------ |
-| ✅ All arguments                | Logs all function inputs                   |
-| ✅ Selected fields              | Logs only selected parameters              |
-| ✅ Subfield logging             | Logs nested fields like `user.id`          |
-| ✅ Custom fields                | Includes hardcoded `"key" = "value"` pairs |
-| ✅ Async function support       | Works with `async fn`                      |
-| ✅ Invalid input compile errors | Ensures robust syntax validation           |
-| ❌ No automatic log propagation | Logs in subfunctions won't include context |
+| Test Case                        | Description                                                        |
+| -------------------------------- | ------------------------------------------------------------------ |
+| ✅ All arguments                  | Logs all function inputs                                           |
+| ✅ Selected fields                | Logs only selected parameters                                      |
+| ✅ Subfield logging               | Logs nested fields like `user.id`                                  |
+| ✅ Custom fields                  | Includes hardcoded `"key" = "value"` pairs                       |
+| ✅ Async function support         | Works with `async fn`                                              |
+| ✅ Invalid input compile errors   | Ensures robust syntax validation                                   |
+| ✅ Automatic log propagation      | Logs in subfunctions include parent context (with `#[params]`)     |
 
 ---
 
