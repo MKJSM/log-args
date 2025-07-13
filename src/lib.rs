@@ -1,26 +1,101 @@
-//! # params
+//! # log-args
 //!
-//! A simple procedural macro to log function arguments using the `tracing` crate.
+//! A procedural macro to automatically log function arguments using the [`tracing`](https://crates.io/crates/tracing) crate.
 //!
-// Library code for the log-args procedural macro
-
-// This crate provides a procedural macro attribute `#[params]` that can be applied to functions
-// to automatically log their arguments. It is designed to be simple, efficient, and easy to integrate
-// into any project that uses `tracing` for structured logging.
-//
-// ## Features
-//
-// - Log all function arguments by default.
-// - Select specific arguments to log.
-// - Log nested fields of struct arguments (e.g., `user.id`).
-// - Add custom key-value pairs to the log output.
-// - Supports both synchronous and asynchronous functions.
-// - All logging is done through the `tracing` ecosystem, which means it has zero-overhead when disabled.
-//
-// For more examples, see the [examples directory](https://github.com/MKJSM/log-args/tree/main/examples) on GitHub.
+//! ## Overview
+//!
+//! This crate provides the `#[params]` attribute macro, which can be applied to functions to automatically log their arguments using the `tracing` ecosystem. It is designed to be simple, efficient, and easy to integrate into any project that uses `tracing` for structured logging.
+//!
+//! ## Features
+//!
+//! - Log all function arguments by default.
+//! - Select specific arguments to log with `fields(...)`.
+//! - Log nested fields of struct arguments (e.g., `user.id`).
+//! - Add custom key-value pairs to the log output with `custom(...)`.
+//! - Supports both synchronous and asynchronous functions.
+//! - All logging is done through `tracing`, with zero-overhead when disabled.
+//! - Compile-time validation for macro attributes.
+//!
+//! ## Example Usage
+//!
+//! ```rust
+//! use log_args::params;
+//! use tracing::info;
+//!
+//! #[derive(Debug)]
+//! struct User { id: u32 }
+//!
+//! #[params]
+//! fn process_user(user: User, task_id: i32) {
+//!     info!("Processing task");
+//! }
+//! // Output: INFO Processing task user=User { id: 42 } task_id=100
+//! ```
+//!
+//! ### Log Specific Fields
+//!
+//! ```rust
+//! use log_args::params;
+//! #[derive(Debug)]
+//! struct User { id: u32 }
+//!
+//! #[params(fields(user.id))]
+//! fn process_user(user: User) {
+//!     // ...
+//! }
+//! // Output: ... user_id=42
+//! ```
+//!
+//! ### Add Custom Key-Value Pairs
+//!
+//! ```rust
+//! use log_args::params;
+//! #[derive(Debug)]
+//! struct User { id: u32 }
+//!
+//! #[params(fields(user.id), custom(service = "auth"))]
+//! fn authenticate(user: User) {
+//!     // ...
+//! }
+//! // Output: ... user_id=42 service="auth"
+//! ```
+//!
+//! ### Async and Span Support
+//!
+//! ```rust
+//! use log_args::params;
+//! #[allow(unused)]
+//! #[params(span = true)]
+//! async fn my_async_fn(arg: i32) {
+//!     // ...
+//! }
+//! // Output: logs are scoped to a tracing span
+//! ```
+//!
+//! ## Attribute Options
+//!
+//! - `fields(arg1, arg2, ...)`: Logs only the specified arguments or their subfields.
+//! - `custom(key1 = "value1", ...)`: Adds custom key-value pairs to the log output.
+//! - `span = true/false`: If true, wraps the function in a tracing span (default: false).
+//!
+//! ## Limitations
+//!
+//! - Logging context is local to the annotated function. Subfunctions do not inherit logged fields.
+//! - Deep field expressions (e.g., `user.name.first`) are not yet supported.
+//!
+//! ## More Examples
+//!
+//! See the [examples directory](https://github.com/MKJSM/log-args/tree/main/examples) on GitHub.
+//!
+//! ## Runtime
+//!
+//! This macro requires the companion crate [`log-args-runtime`](https://crates.io/crates/log-args-runtime) for runtime context propagation. This is handled automatically if you depend on `log-args`.
+//!
+//! ## License
+//!
+//! Licensed under MIT or Apache-2.0. See [LICENSE](https://github.com/MKJSM/log-args/blob/main/LICENSE).
 
 extern crate proc_macro;
-
 
 use proc_macro::TokenStream;
 use quote::{quote, ToTokens};

@@ -1,34 +1,33 @@
-# params
+# log-args
 
-[![Crates.io](https://img.shields.io/crates/v/params.svg)](https://crates.io/crates/log-args)
+[![Crates.io](https://img.shields.io/crates/v/log-args.svg)](https://crates.io/crates/log-args)
 [![Docs.rs](https://docs.rs/log-args/badge.svg)](https://docs.rs/log-args)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/MKJSM/log-args/blob/main/LICENSE)
 [![Build Status](https://github.com/MKJSM/log-args/actions/workflows/publish.yml/badge.svg)](https://github.com/MKJSM/log-args/actions)
 
-A simple procedural macro to log function arguments using the `tracing` crate.
-
-This crate provides a procedural macro attribute `#[params]` that can be applied to functions to automatically log their arguments. It is designed to be simple, efficient, and easy to integrate into any project that uses `tracing` for structured logging.
+A procedural macro to automatically log function arguments using the [`tracing`](https://crates.io/crates/tracing) crate.
 
 ---
 
 ## ✨ Features
 
-- **Log all function arguments** by default.
-- **Select specific arguments** to log using `fields(...)`.
-- **Log nested fields** of struct arguments (e.g., `user.id`).
-- **Add custom key-value pairs** to the log output using `custom(...)`.
-- Supports both **synchronous and asynchronous functions**.
-- All logging is done through the `tracing` ecosystem, which means it has **zero-overhead** when disabled.
+- **Log all function arguments** by default with `#[params]`.
+- **Select specific arguments** to log via `fields(...)`.
+- **Log nested fields** (e.g., `user.id`).
+- **Add custom key-value pairs** to the log output via `custom(...)`.
+- Supports both **sync and async functions**.
+- All logging is done through the `tracing` ecosystem, with **zero-overhead** when disabled.
+- Compile-time validation for macro attributes.
 
 ---
 
 ## 📦 Installation
 
-Add `params` to your `Cargo.toml`:
+Add `log-args` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-params = "0.1.0" # Replace with the latest version from crates.io
+log-args = "*" # Use the latest version from crates.io
 tracing = "0.1"
 tracing-attributes = "0.1"
 ```
@@ -37,12 +36,10 @@ tracing-attributes = "0.1"
 
 ## 🔧 Usage
 
-### 1. Log All Arguments
-
-By default, `#[params]` logs all arguments of a function.
+### Log All Arguments
 
 ```rust
-use params::params;
+use log_args::params;
 use tracing::info;
 
 #[derive(Debug)]
@@ -52,12 +49,10 @@ struct User { id: u32 }
 fn process_user(user: User, task_id: i32) {
     info!("Processing task");
 }
-
-// Log output will be similar to:
-// INFO Processing task user=User { id: 42 } task_id=100
+// Output: INFO Processing task user=User { id: 42 } task_id=100
 ```
 
-### 2. Log Specific Fields
+### Log Specific Fields
 
 Use `fields(...)` to select which arguments or subfields to log.
 

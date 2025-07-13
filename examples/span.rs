@@ -1,5 +1,4 @@
 use log_args::params;
-use tracing::info;
 use tracing_subscriber;
 
 fn main() {
@@ -12,8 +11,8 @@ fn main() {
 
 #[params(span = true)]
 fn my_function(arg1: i32) {
-    debug!("Inside my_function");
-    info!("Inside my_function");
+    tracing::debug!("Inside my_function");
+    tracing::info!("Inside my_function");
     warn!("Inside my_function");
     error!("Inside my_function");
     sub_function();
@@ -21,16 +20,16 @@ fn my_function(arg1: i32) {
 
 #[params]
 fn sub_function() {
-    debug!("Inside sub_function");
-    info!("Inside sub_function");
+    tracing::debug!("Inside sub_function");
+    tracing::info!("Inside sub_function");
     warn!("Inside sub_function");
     error!("Inside sub_function");
 }
 
 #[params]
 fn my_function2(arg1: i32) {
-    debug!("Inside my_function2");
-    info!("Inside my_function2");
+    tracing::debug!("Inside my_function2");
+    tracing::info!("Inside my_function2");
     warn!("Inside my_function2");
     error!("Inside my_function2");
     sub_function();
