@@ -1,4 +1,5 @@
 use log_args::params;
+use tracing::debug;
 use tracing_subscriber;
 
 fn main() {
@@ -11,7 +12,7 @@ fn main() {
     my_function3(123);
 }
 
-#[params(span = true)]
+#[params(span)]
 fn my_function(arg1: i32) {
     debug!("Inside my_function");
     sub_function();
@@ -33,7 +34,7 @@ fn sub_function2(name: String) {
     debug!("Inside sub_function2");
 }
 
-#[params]
+#[params(span)]
 fn my_function3(arg1: i32) {
     debug!("Inside my_function3");
     sub_function2("name".to_string());

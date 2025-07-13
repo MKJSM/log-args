@@ -93,15 +93,19 @@ use syn::{Expr, ItemFn, Meta, Token};
 /// - `fields(...)`: A list of expressions to be logged.
 struct Params {
     fields: Vec<Expr>,
+    custom: Vec<(syn::Ident, syn::Expr)>,
+    span: bool,
 }
 
 impl Parse for Params {
     /// Parses the token stream from the macro attribute into a `Params` struct.
     fn parse(input: ParseStream) -> Result<Self> {
         let mut fields_to_log: Punctuated<Expr, Token![,]> = Punctuated::new();
+        let mut custom_fields: Vec<(syn::Ident, syn::Expr)> = Vec::new();
 
         let metas = Punctuated::<Meta, Token![,]>::parse_terminated(input)?;
 
+        let mut span = false;
         for meta in metas {
             if meta.path().is_ident("fields") {
                 if let Meta::List(list) = meta {
@@ -111,16 +115,35 @@ impl Parse for Params {
                 } else {
                     return Err(input.error("Expected `fields(...)`"));
                 }
+            } else if meta.path().is_ident("custom") {
+                if let Meta::List(list) = meta {
+                    let pairs = list.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)?;
+                    for pair in pairs {
+                        if let Meta::NameValue(nv) = pair {
+                            if let Some(ident) = nv.path.get_ident() {
+                                let expr = nv.value.clone();
+                                custom_fields.push((ident.clone(), expr));
+                            } else {
+                                return Err(input.error("Expected identifier for custom key"));
+                            }
+                        } else {
+                            return Err(input.error("Expected key = value in custom(...)"));
+                        }
+                    }
+                } else {
+                    return Err(input.error("Expected `custom(...)`"));
+                }
             } else {
                 let path = meta
                     .path()
                     .get_ident()
                     .map(|i| i.to_string())
                     .unwrap_or_default();
-                if path != "span" {
-                    // We ignore `span` but don't error on it
+                if path == "span" {
+                    span = true;
+                } else {
                     return Err(
-                        input.error(format!("Unknown attribute `{path}`, expected `fields`"))
+                        input.error(format!("Unknown attribute `{path}`, expected `fields`, `custom` or `span`"))
                     );
                 }
             }
@@ -128,6 +151,8 @@ impl Parse for Params {
 
         Ok(Params {
             fields: fields_to_log.into_iter().collect(),
+            custom: custom_fields,
+            span,
         })
     }
 }
@@ -136,6 +161,7 @@ impl Parse for Params {
 pub fn params(args: TokenStream, input: TokenStream) -> TokenStream {
     let params = syn::parse_macro_input!(args as Params);
     let mut func = syn::parse_macro_input!(input as ItemFn);
+    let span_enabled = params.span;
 
     let fields_to_log = if params.fields.is_empty() {
         func.sig
@@ -162,7 +188,9 @@ pub fn params(args: TokenStream, input: TokenStream) -> TokenStream {
 
     let orig_block = func.block;
 
-    let arg_fmt = if !fields_to_log.is_empty() {
+    let arg_fmt = if !fields_to_log.is_empty() || !params.custom.is_empty() {
+        let custom_keys: Vec<_> = params.custom.iter().map(|(k, _)| k).collect();
+        let custom_values: Vec<_> = params.custom.iter().map(|(_, v)| v).collect();
         quote! {
             use std::collections::HashMap;
             let mut map = HashMap::new();
@@ -177,6 +205,7 @@ pub fn params(args: TokenStream, input: TokenStream) -> TokenStream {
             }
 
             #(map.insert(#fields_to_log_keys.to_string(), format!("{:?}", #fields_to_log));)*
+            #(map.insert(stringify!(#custom_keys).to_string(), format!("{:?}", #custom_values));)*
 
             let mut sorted_keys: Vec<_> = map.keys().collect();
             sorted_keys.sort();
@@ -200,14 +229,17 @@ pub fn params(args: TokenStream, input: TokenStream) -> TokenStream {
         })
         .collect::<String>();
 
-    let span_code = {
-        let __log_args_str_copy = quote! { let __log_args_str_copy = __log_args_str.clone(); };
+    let span_code = if span_enabled {
         quote! {
-            #__log_args_str_copy
-            log_args_runtime::__PARENT_LOG_ARGS.with(|slot| {
-                *slot.borrow_mut() = if __log_args_str_copy.is_empty() { None } else { Some(__log_args_str_copy) };
-            });
+            let __log_args_str = map.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<_>>().join(" ");
+            let __log_args_guard = if !__log_args_str.is_empty() {
+                Some(log_args_runtime::set_parent_log_args(__log_args_str.clone()))
+            } else {
+                None
+            };
         }
+    } else {
+        quote! {}
     };
 
     let injected_code = {
@@ -259,10 +291,19 @@ pub fn params(args: TokenStream, input: TokenStream) -> TokenStream {
         }
     };
 
-    func.block = Box::new(syn::parse_quote!({
-        #injected_code
-        #orig_block
-    }));
+    func.block = if span_enabled {
+        Box::new(syn::parse_quote!({
+            #injected_code
+            #orig_block
+            drop(__log_args_guard);
+        }))
+    } else {
+        Box::new(syn::parse_quote!({
+            #injected_code
+            #orig_block
+        }))
+    };
+
 
     TokenStream::from(quote! { #func })
 }

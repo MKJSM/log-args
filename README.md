@@ -7,97 +7,68 @@
 
 A procedural macro to automatically log function arguments using the [`tracing`](https://crates.io/crates/tracing) crate.
 
----
+## Overview
 
-## ✨ Features
+This crate provides the `#[params]` attribute macro, which can be applied to functions to automatically log their arguments. It enriches your logs with contextual data, making debugging and monitoring more effective.
 
-- **Log all function arguments** by default with `#[params]`.
-- **Select specific arguments** to log via `fields(...)`.
-- **Log nested fields** (e.g., `user.id`).
-- **Add custom key-value pairs** to the log output via `custom(...)`.
-- Supports both **sync and async functions**.
-- All logging is done through the `tracing` ecosystem, with **zero-overhead** when disabled.
-- Compile-time validation for macro attributes.
+## Features
 
----
+- **Automatic Argument Logging**: Log all function arguments by default.
+- **Selective Logging**: Choose specific arguments or fields to log using `fields(user.id)`.
+- **Context Propagation**: Use `#[params(span)]` to propagate arguments to nested function calls, creating a logical logging scope.
+- **Seamless Integration**: Works with the entire `tracing` ecosystem.
+- **Async Support**: Fully compatible with `async` functions.
 
-## 📦 Installation
+## Example Usage
 
-Add `log-args` to your `Cargo.toml`:
-
-```toml
-[dependencies]
-log-args = "*" # Use the latest version from crates.io
-tracing = "0.1"
-tracing-attributes = "0.1"
-```
-
----
-
-## 🔧 Usage
-
-### Log All Arguments
+### Basic Logging
 
 ```rust
 use log_args::params;
-use tracing::info;
-
-#[derive(Debug)]
-struct User { id: u32 }
+use tracing::{debug, info};
 
 #[params]
-fn process_user(user: User, task_id: i32) {
-    info!("Processing task");
+fn process_data(data: &str, count: u32) {
+    info!("Processing data");
 }
-// Output: INFO Processing task user=User { id: 42 } task_id=100
+// Log output will include: `data="example" count=42`
 ```
 
-### Log Specific Fields
+### Context Propagation with `span`
 
-Use `fields(...)` to select which arguments or subfields to log.
+Use `#[params(span)]` to create a logging context that is passed to sub-functions.
 
 ```rust
 use log_args::params;
-use tracing::warn;
+use tracing::{debug, info};
 
-#[derive(Debug)]
-struct User { id: u32, name: String }
-
-#[params(fields(user.id))]
-fn process_user(user: User) {
-    warn!("Warn about user");
-}
-// Output: WARN Warn about user user.id=42
-```
-
-### Using `span` for Structured, Hierarchical Logging
-
-The `span` attribute enables automatic creation of a [tracing span](https://docs.rs/tracing/latest/tracing/struct.Span.html) for the annotated function. All logs inside the function will be attached to this span, providing structured, hierarchical context in your logs.
-
-**How to use:**
-```rust
-#[params(span = true)]
-fn my_function(arg1: i32) {
-    debug!("Inside my_function");
-    sub_function();
+#[params(span)]
+fn outer_task(task_id: i32) {
+    info!("Starting outer task");
+    inner_task("sub-task-1");
 }
 
 #[params]
-fn sub_function() {
-    debug!("Inside sub_function");
+fn inner_task(name: &str) {
+    debug!("Executing inner task");
 }
+
+// When `outer_task(123)` is called, the log for `inner_task` will be:
+// DEBUG ...: Executing inner task task_id=123 name="sub-task-1"
 ```
 
-**What this does:**
-- When `span = true` is set, entering the function creates a new tracing span named after the function (e.g., `my_function`).
-- All logs within the function are recorded within this span, including logs from called functions (if they also use `#[params(span = true)]`).
-- This is especially useful for async or concurrent code, where context propagation is important.
+## Attribute Options
 
-**Example output:**
-```
-2025-07-13T07:23:50.707806Z DEBUG span: MyFunction: Inside my_function arg1=123
-2025-07-13T07:23:50.707831Z DEBUG span: SubFunction: Inside sub_function arg1=123
-```
+- `fields(arg1, arg2, ...)`: Logs only the specified arguments. If not provided, all arguments are logged.
+- `span`: When present (`#[params(span)]`), arguments from this function are propagated to any `#[params]`-annotated functions it calls. This context is automatically cleared when the function goes out of scope.
+
+## Runtime
+
+This macro requires the companion crate [`log-args-runtime`](https://crates.io/crates/log-args-runtime), which is included as a dependency.
+
+## License
+
+Licensed under MIT or Apache-2.0.
 
 **Best practices:**
 - Use `span = true` for top-level or important functions to group related logs.
