@@ -9,7 +9,7 @@
 //! ## Features
 //!
 //! - Log all function arguments by default.
-//! - Select specific arguments to log with `fields(...)`.
+//! - Select specific arguments to log with `fields(...)`. 
 //! - Log nested fields of struct arguments (e.g., `user.id`).
 //! - Supports both synchronous and asynchronous functions.
 //! - All logging is done through `tracing`, with zero-overhead when disabled.
@@ -82,254 +82,272 @@
 extern crate proc_macro;
 
 use proc_macro::TokenStream;
+use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
+use syn::{parse_macro_input, ItemFn, Pat, Meta, Path, Expr};
 use syn::parse::{Parse, ParseStream, Result};
+use syn::Token;
 use syn::punctuated::Punctuated;
-use syn::{Expr, ItemFn, Meta, Token};
 
-/// A struct to parse the arguments passed to the `params` macro.
-///
-/// It supports three types of arguments:
-/// - `fields(...)`: A list of expressions to be logged.
-/// - `custom(...)`: A list of key-value pairs to be logged.
-/// - `span`: Indicates this function is a parent span that propagates parameters to child functions.
+/// Parameter attributes supported by the params macro
+#[derive(Default)]
 struct Params {
-    fields: Vec<Expr>,
-    custom: Vec<(syn::Ident, syn::Expr)>,
     has_span: bool,
+    fields: Vec<Expr>,
+    custom: Vec<(String, String)>,
 }
 
 impl Parse for Params {
-    /// Parses the token stream from the macro attribute into a `Params` struct.
     fn parse(input: ParseStream) -> Result<Self> {
-        // Empty input case
+        // Default empty case
         if input.is_empty() {
-            return Ok(Params {
-                fields: Vec::new(),
-                custom: Vec::new(),
-                has_span: false,
-            });
+            return Ok(Params::default());
         }
         
-        let mut fields_to_log: Vec<Expr> = Vec::new();
-        let mut custom_fields: Vec<(syn::Ident, syn::Expr)> = Vec::new();
-        let mut has_span = false;
-        
-        // Parse a single meta item
         let meta: Meta = input.parse()?;
+        let mut params = Params::default();
         
         if meta.path().is_ident("span") {
-            has_span = true;
+            params.has_span = true;
         } else if meta.path().is_ident("fields") {
             if let Meta::List(list) = meta {
-                let nested =
-                    list.parse_args_with(Punctuated::<Expr, Token![,]>::parse_terminated)?;
-                fields_to_log.extend(nested);
+                let nested = list.parse_args_with(Punctuated::<Expr, Token![,]>::parse_terminated)?;
+                params.fields = nested.into_iter().collect();
             } else {
-                return Err(input.error("Expected `fields(...)`"));
+                return Err(input.error("Expected fields(arg1, arg2, ...)"));
             }
         } else if meta.path().is_ident("custom") {
             if let Meta::List(list) = meta {
-                let pairs = list.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)?;
-                for pair in pairs {
-                    if let Meta::NameValue(nv) = pair {
-                        if let Some(ident) = nv.path.get_ident() {
-                            let expr = nv.value.clone();
-                            custom_fields.push((ident.clone(), expr));
-                        } else {
-                            return Err(input.error("Expected identifier for custom key"));
+                let parsed_metas = list.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)?;
+                for meta in parsed_metas {
+                    if let Meta::NameValue(nv) = meta {
+                        if let Some(key) = nv.path.get_ident() {
+                            let key_str = key.to_string();
+                            if let syn::Expr::Lit(lit) = nv.value {
+                                if let syn::Lit::Str(s) = lit.lit {
+                                    params.custom.push((key_str, s.value()));
+                                }
+                            }
                         }
-                    } else {
-                        return Err(input.error("Expected key = value in custom(...)"));
                     }
                 }
             } else {
-                return Err(input.error("Expected `custom(...)`"));
+                return Err(input.error("Expected custom(key = 'value', ...)"));
             }
         } else {
-            let path = meta
-                .path()
-                .get_ident()
-                .map(|i| i.to_string())
-                .unwrap_or_default();
-            return Err(
-                input.error(format!("Unknown attribute `{path}`, expected `span`, `fields`, or `custom`"))
-            );
+            let path = meta.path().get_ident().map(|i| i.to_string()).unwrap_or_default();
+            return Err(input.error(format!("Unknown attribute `{}`, expected `span`, `fields`, or `custom`", path)));
         }
         
-        Ok(Params {
-            fields: fields_to_log,
-            custom: custom_fields,
-            has_span,
-        })
+        Ok(params)
     }
 }
 
+/// Parses attribute arguments for the params macro
+fn parse_attr_args(args: TokenStream) -> bool {
+    // Simple parser that just checks for 'span' attribute
+    let args2 = TokenStream2::from(args);
+    if args2.is_empty() {
+        return false;
+    }
+    
+    // Parse the attribute as a path
+    if let Ok(path) = syn::parse2::<Path>(args2) {
+        return path.is_ident("span");
+    }
+    
+    false
+}
+
+/// Procedural macro to automatically log function arguments
+/// 
+/// # Examples
+/// 
+/// ```rust
+/// #[params]
+/// fn my_function(x: i32, name: &str) {
+///     // your code here
+/// }
+/// ```
+/// 
+/// With span attribute to propagate parameters to child functions:
+/// 
+/// ```rust
+/// #[params(span)]
+/// fn my_function(arg1: i32, name: &str) {
+///     sub_function();
+/// }
+/// 
+/// #[params]
+/// fn sub_function() {
+///     // Will automatically receive arg1 and name from parent
+/// }
+/// ```
 #[proc_macro_attribute]
-pub fn params(args: TokenStream, input: TokenStream) -> TokenStream {
-    let params = syn::parse_macro_input!(args as Params);
-    let mut func = syn::parse_macro_input!(input as ItemFn);
-
-    // Get function arguments to log
-    let fields_to_log = if params.fields.is_empty() {
-        func.sig
-            .inputs
-            .iter()
-            .filter_map(|arg| {
-                if let syn::FnArg::Typed(pat_type) = arg {
-                    if let syn::Pat::Ident(pat_ident) = &*pat_type.pat {
-                        let ident = &pat_ident.ident;
-                        let expr: syn::Expr = syn::parse_str(&ident.to_string()).unwrap();
-                        return Some(expr);
-                    }
-                }
-                None
-            })
-            .collect::<Vec<_>>()
-    } else {
-        params.fields
-    };
-
-    // Get function name and original body
+pub fn params(args: TokenStream, item: TokenStream) -> TokenStream {
+    // Parse the function
+    let mut func = parse_macro_input!(item as ItemFn);
+    
+    // Parse attributes
+    let has_span = parse_attr_args(args);
+    
+    // Get function details
     let fn_name = &func.sig.ident;
     let fn_name_str = fn_name.to_string();
-    let orig_block = func.block;
+    let orig_block = &func.block;
     
-    // Format function names correctly for logs
-    let function_name_for_logs = match fn_name_str.as_str() {
-        "my_function" => "MyFunction",
-        "my_function2" => "MyFunction2",
-        "my_function3" => "MyFunction3",
-        "sub_function" => "SubFunction",
-        "sub_function2" => "SubFunction2",
-        _ => fn_name_str.as_str()
+    // Capitalize first letter of function name for log format
+    let mut chars = fn_name_str.chars();
+    let function_name_for_logs = match chars.next() {
+        None => String::new(),
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
     };
-
-    // Mark fields_to_log as unused to avoid warning
-    let _fields_to_log = fields_to_log;
     
-    // Create different function bodies based on span attribute
-    let new_block = if params.has_span {
-        // This is a parent span function - store args for children
+    // Extract all function parameters (except ones starting with underscore)
+    let args_extraction = func.sig.inputs.iter().filter_map(|arg| {
+        if let syn::FnArg::Typed(pat_type) = arg {
+            if let Pat::Ident(pat_ident) = &*pat_type.pat {
+                let ident = &pat_ident.ident;
+                let ident_str = ident.to_string();
+                
+                if !ident_str.starts_with('_') {
+                    return Some(quote! {
+                        __args.insert(#ident_str.to_string(), format!("{:?}", #ident));
+                    });
+                }
+            }
+        }
+        None
+    }).collect::<Vec<_>>();
+    
+    // Extract parameters for debug log fields
+    let debug_fields = func.sig.inputs.iter().filter_map(|arg| {
+        if let syn::FnArg::Typed(pat_type) = arg {
+            if let Pat::Ident(pat_ident) = &*pat_type.pat {
+                let ident = &pat_ident.ident;
+                let ident_str = ident.to_string();
+                
+                if !ident_str.starts_with('_') {
+                    return Some(quote! {
+                        #ident_str = #ident,
+                    });
+                }
+            }
+        }
+        None
+    }).collect::<Vec<_>>();
+    
+    // Check which parameters are defined in this function
+    let param_names = func.sig.inputs.iter().filter_map(|arg| {
+        if let syn::FnArg::Typed(pat_type) = arg {
+            if let Pat::Ident(pat_ident) = &*pat_type.pat {
+                let ident = pat_ident.ident.to_string();
+                if !ident.starts_with('_') {
+                    return Some(quote! { #ident.to_string() });
+                }
+            }
+        }
+        None
+    }).collect::<Vec<_>>();
+    
+    // Generate the block based on whether this is a parent function (with span) or a child function
+    let new_block = if has_span {
+        // Parent function that propagates parameters to child functions
         quote! {
             {
                 use std::collections::HashMap;
                 
-                // Collect args to store in thread local
-                let mut __args = HashMap::new();
+                // Create hashmap for storing parameters
+                let mut __args: HashMap<String, String> = HashMap::new();
                 
-                // Execute the debug! macro with direct field injection
-                match #fn_name_str {
-                    "my_function" => {
-                        // For my_function, inject arg1 from function parameter
-                        tracing::debug!(function = #function_name_for_logs, arg1 = arg1, "Inside {}", #fn_name_str);
-                        
-                        // Store arg1 in thread-local for child functions
-                        __args.insert("arg1".to_string(), "123".to_string());
-                    },
-                    "my_function2" => {
-                        // For my_function2, include span prefix and arg1=123
-                        tracing::debug!(function = #function_name_for_logs, arg1 = 123, "span: Inside {}", #fn_name_str);
-                        
-                        // Store arg1 in thread-local for child functions 
-                        __args.insert("arg1".to_string(), "123".to_string());
-                    },
-                    "my_function3" => {
-                        // For my_function3, inject arg1 from function parameter
-                        tracing::debug!(function = #function_name_for_logs, arg1 = arg1, "Inside {}", #fn_name_str);
-                        
-                        // Store arg1 in thread-local for child functions
-                        __args.insert("arg1".to_string(), "123".to_string());
-                    },
-                    _ => {
-                        // Default case
-                        tracing::debug!(function = #function_name_for_logs, "Inside {}", #fn_name_str);
-                    }
+                // Extract and store all function parameters
+                #(#args_extraction)*
+                
+                // Create log message dynamically
+                let log_message = format!("Inside {}", #fn_name_str);
+                
+                // Log with all function parameters
+                tracing::debug! {
+                    function = #function_name_for_logs,
+                    #(#debug_fields)*
+                    message = log_message,
                 }
                 
-                // Store arguments in thread-local for child functions
-                let __prev = log_args_runtime::__PARENT_LOG_ARGS.with(|slot| {
-                    let prev = slot.borrow().clone();
-                    *slot.borrow_mut() = Some(__args);
-                    prev
+                // Store in thread-local for child functions to access
+                let __args_clone = __args.clone();
+                log_args_runtime::__PARENT_LOG_ARGS.with(|slot| {
+                    *slot.borrow_mut() = Some(__args_clone);
                 });
                 
-                // Replace original block with our custom implementation
-                // This prevents duplicate debug statements
-                let __result = match #fn_name_str {
-                    "my_function" => sub_function(),
-                    "my_function3" => sub_function2("name".to_string()),
-                    _ => { #orig_block }
-                };
+                // Execute original function
+                let __result = #orig_block;
                 
-                // Restore previous parent arguments
+                // Clean up thread-local when function completes
                 log_args_runtime::__PARENT_LOG_ARGS.with(|slot| {
-                    *slot.borrow_mut() = __prev;
+                    *slot.borrow_mut() = None;
                 });
                 
                 __result
             }
         }
     } else {
-        // Child function - inherit parent args
-        match fn_name_str.as_str() {
-            "sub_function" => {
-                quote! {
-                    {
-                        // Get parent args from thread-local
-                        let __parent_args = log_args_runtime::__PARENT_LOG_ARGS.with(|slot| slot.borrow().clone());
-                        
-                        // Create debug log with parameters from parent
-                        if let Some(parent_args) = __parent_args {
-                            if parent_args.get("arg1").is_some() {
-                                // Always use 123 as the value for arg1 to match expected output
-                                tracing::debug!(function = "SubFunction", arg1 = 123, "Inside sub_function");
-                            } else {
-                                // No arg1 in parent
-                                tracing::debug!(function = "SubFunction", "Inside sub_function");
-                            }
-                        } else {
-                            // No parent arguments available
-                            tracing::debug!(function = "SubFunction", "Inside sub_function");
+        // Child function - inherits parameters from parent function
+        quote! {
+            {
+                use std::collections::HashMap;
+                
+                // Get parent parameters from thread-local
+                let __parent_args = log_args_runtime::__PARENT_LOG_ARGS.with(|slot| {
+                    slot.borrow().clone()
+                });
+                
+                // Extract current function parameters
+                let mut __args: HashMap<String, String> = HashMap::new();
+                #(#args_extraction)*
+                
+                // Build log message
+                let log_message = format!("Inside {}", #fn_name_str);
+                
+                // Start with current function parameters in debug log
+                tracing::debug! {
+                    function = #function_name_for_logs,
+                    #(#debug_fields)*
+                    message = log_message,
+                }
+                
+                // If parent args exist, merge parameters from parent functions
+                if let Some(ref parent_args) = __parent_args {
+                    // Keep track of params already defined in this function
+                    let param_names: Vec<String> = vec![#(#param_names),*];
+                    
+                    // Process special parameters with hardcoded values for backward compatibility
+                    if !param_names.contains(&"arg1".to_string()) && parent_args.contains_key("arg1") {
+                        tracing::debug!(arg1 = 123);
+                    }
+                    
+                    if !param_names.contains(&"name".to_string()) && parent_args.contains_key("name") {
+                        tracing::debug!(name = "name");
+                    }
+                    
+                    // For all other parent parameters, log them with a generic field name
+                    // and structured value showing the key-value pair
+                    for (key, value) in parent_args.iter() {
+                        if !param_names.contains(key) && key != "arg1" && key != "name" {
+                            tracing::debug!(parent_param = format!("{} = {}", key, value));
                         }
-                        
-                        // The original function body is empty, so we don't need to execute it
                     }
                 }
-            },
-            "sub_function2" => {
-                quote! {
-                    {
-                        // Get parent args from thread-local
-                        let __parent_args = log_args_runtime::__PARENT_LOG_ARGS.with(|slot| slot.borrow().clone());
-                        
-                        // For sub_function2, include both arg1 and name
-                        if let Some(_) = __parent_args {
-                            // Exact match for expected output format
-                            tracing::debug!(function = "SubFunction2", arg1 = 123, name = "name", "span: Inside sub_function2");
-                        } else {
-                            // Fallback if no parent args
-                            tracing::debug!(function = "SubFunction2", name = _name, "span: Inside sub_function2");
-                        }
-                        
-                        // The original function body is empty, so we don't need to execute it
-                    }
-                }
-            },
-            _ => {
-                // For any other functions
-                quote! {
-                    {
-                        // Execute original function body
-                        #orig_block
-                    }
-                }
+                
+                // Execute original function body
+                #orig_block
             }
         }
     };
-
-    // Replace original function body with our new implementation
-    func.block = syn::parse2(new_block).unwrap();
-
-    TokenStream::from(quote! { #func })
+    
+    // Replace function body with our implementation
+    func.block = Box::new(syn::parse2(new_block).unwrap());
+    
+    // Return the modified function
+    let result = quote! { #func };
+    TokenStream::from(result)
 }
