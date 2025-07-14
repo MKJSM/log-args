@@ -24,14 +24,15 @@
 //! });
 //! ```
 use std::cell::RefCell;
+use std::collections::HashMap;
 
 thread_local! {
-    pub static __PARENT_LOG_ARGS: RefCell<Option<String>> = RefCell::new(None);
+    pub static __PARENT_LOG_ARGS: RefCell<Option<HashMap<String, String>>> = RefCell::new(None);
 }
 
 pub struct ParentLogArgsGuard;
 
-pub fn set_parent_log_args(ctx: String) -> ParentLogArgsGuard {
+pub fn set_parent_log_args(ctx: HashMap<String, String>) -> ParentLogArgsGuard {
     __PARENT_LOG_ARGS.with(|parent| {
         *parent.borrow_mut() = Some(ctx);
     });

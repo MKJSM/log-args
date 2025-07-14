@@ -1,4 +1,4 @@
-error: unexpected end of input, Unknown attribute, expected `fields`, `custom` or `span`
+error: unexpected end of input, Unknown attribute `field`, expected `fields`, `custom` or `span`
   --> tests/06-invalid-input.rs:10:1
    |
 10 | #[params(field(user.id))]
