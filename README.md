@@ -6,20 +6,32 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/MKJSM/log-args/blob/main/LICENSE)
 [![Build Status](https://github.com/MKJSM/log-args/actions/workflows/publish.yml/badge.svg)](https://github.com/MKJSM/log-args/actions)
 
-A simple procedural macro to log function arguments using the `tracing` crate.
+A procedural macro for structured logging of function arguments using the `tracing` crate, with special support for async contexts.
 
-This crate provides a procedural macro attribute `#[log_args]` that can be applied to functions to automatically log their arguments. It is designed to be simple, efficient, and easy to integrate into any project that uses `tracing` for structured logging.
+This crate provides a procedural macro attribute `#[params]` that can be applied to functions to automatically log their arguments. It seamlessly integrates with the `tracing` ecosystem for structured logging, offering enhanced flexibility for both synchronous and asynchronous functions.
+
+---
+
+## 🚀 Overview
+
+- **Macro name:** `#[params]`
+- **Purpose:** Automatically logs function arguments and custom fields using the `tracing` macros (`info!`, `debug!`, etc.)
+- **Works with:** Both synchronous and asynchronous functions, with special support for async contexts
+- **Flexible logging:** Control exactly what fields are logged, including nested struct fields
+- **Async-friendly:** Special `clone_upfront` option for handling ownership in async blocks
 
 ---
 
 ## ✨ Features
 
-- **Log all function arguments** by default.
-- **Select specific arguments** to log using `fields(...)`.
-- **Log nested fields** of struct arguments (e.g., `user.id`).
-- **Add custom key-value pairs** to the log output using `custom(...)`.
-- Supports both **synchronous and asynchronous functions**.
-- All logging is done through the `tracing` ecosystem, which means it has **zero-overhead** when disabled.
+- **Log all function arguments** by default
+- **Select specific arguments** to log using `fields(...)`
+- **Log nested fields** of struct arguments (e.g., `user.id`)
+- **Add custom key-value pairs** to the log output using `custom(...)`
+- **Async support** with special `clone_upfront` option for ownership in async contexts
+- Supports both **synchronous and asynchronous functions**
+- All logging is done through the `tracing` macros (`info!`, `debug!`, `warn!`, `error!`, `trace!`)
+- **No `level` attribute**: Use the desired `tracing` macro directly in your function body
 
 ---
 
@@ -29,151 +41,220 @@ Add `log_args` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-log_args = "0.1.0" # Replace with the latest version from crates.io
+log_args = "0.1" # Replace with the latest version from crates.io
 tracing = "0.1"
+```
+
+You'll also need a compatible `tracing` subscriber to process and display logs. For example:
+
+```rust
+// Initialize a simple console subscriber
+tracing_subscriber::fmt().init();
 ```
 
 ---
 
-## 🔧 Usage
+## 🔧 Basic Usage
 
-### 1. Log All Arguments
+### Log All Arguments
 
-By default, `#[log_args]` logs all arguments of a function.
+By default, `#[params]` logs all arguments of a function.
 
 ```rust
-use log_args::log_args;
+use log_args::params;
 use tracing::info;
 
 #[derive(Debug)]
-struct User { id: u32 }
+struct User { id: u32, name: String }
 
-#[log_args]
+#[params]
 fn process_user(user: User, task_id: i32) {
     info!("Processing task");
 }
 
 // Log output will be similar to:
-// INFO Processing task user=User { id: 42 } task_id=100
+// INFO process_user: Processing task user=User { id: 42, name: "Alice" } task_id=100
 ```
 
-### 2. Log Specific Fields
+### Log Specific Fields
 
-Use `fields(...)` to select which arguments or subfields to log.
+You can specify which arguments or fields to log using the `fields(...)` attribute:
 
 ```rust
-use log_args::log_args;
-use tracing::warn;
+use log_args::params;
+use tracing::info;
 
 #[derive(Debug)]
 struct User { id: u32, name: String }
 
-#[log_args(fields(user.id))]
-fn process_user(user: User) {
-    warn!("Processing failed");
+#[params(fields(user.id, user.name))]
+fn process_user(user: User, task_id: i32) {
+    info!("Processing task");
 }
 
 // Log output will be similar to:
-// WARN Processing failed user_id=42
+// INFO process_user: Processing task user.id=42 user.name="Alice"
 ```
 
-### 3. Add Custom Key-Value Pairs
+### Add Custom Key-Value Pairs
 
-Use `custom(...)` to add static key-value pairs to your logs.
+Use `custom(...)` to add static key-value pairs to your logs:
 
 ```rust
-use log_args::log_args;
+use log_args::params;
 use tracing::info;
 
 #[derive(Debug)]
-struct User { id: u32 }
+struct User { id: u32, name: String }
 
-#[log_args(fields(user.id), custom(service = "auth", env = "production"))]
-fn authenticate(user: User) {
-    info!("Login attempt");
+#[params(custom(service_name = "user-service", version = "1.0"))]
+fn process_user(user: User, task_id: i32) {
+    info!("Processing task");
 }
 
 // Log output will be similar to:
-// INFO Login attempt user_id=42 service="auth" env="production"
+// INFO process_user: Processing task user=User { id: 42, name: "Alice" } task_id=100 service_name="user-service" version="1.0"
 ```
 
-### 4. Asynchronous Functions
+### Combine Multiple Options
 
-The macro works seamlessly with `async` functions.
+You can combine `fields` and `custom` options:
 
 ```rust
-use log_args::log_args;
+use log_args::params;
 use tracing::info;
 
 #[derive(Debug)]
-struct User { email: String }
+struct User { id: u32, name: String }
 
-#[log_args(fields(user.email))]
-async fn send_email(user: User) {
-    info!("Sending confirmation email");
-    // ... async logic ...
+#[params(fields(user.id), custom(service_name = "user-service"))]
+fn process_user(user: User, task_id: i32) {
+    info!("Processing task");
+}
+
+// Log output will be similar to:
+// INFO process_user: Processing task user.id=42 service_name="user-service"
+```
+
+---
+
+## 🔄 Advanced Usage: Async Functions
+
+The `#[params]` macro works seamlessly with async functions:
+
+```rust
+use log_args::params;
+use tracing::info;
+use tokio::time::sleep;
+use std::time::Duration;
+
+#[derive(Debug)]
+struct User { id: u32, name: String }
+
+#[params]
+async fn process_user_async(user: User, task_id: i32) {
+    info!("Starting async task");
+    sleep(Duration::from_millis(100)).await;
+    info!("Completed async task");
 }
 ```
 
-For more detailed examples, please see the [examples directory](https://github.com/MKJSM/log-args/tree/main/examples) in the repository.
+### Using `clone_upfront` for Async Contexts
 
----
-
-## 📜 License
-
-This project is licensed under the MIT License. See the [LICENSE](https://github.com/MKJSM/log-args/blob/main/LICENSE) file for details.
-
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit a pull request or open an issue.
-
-
----
-
-## ⚙️ How It Works
-
-* The macro injects helper logging macros (`info!`, `warn!`, etc.) directly into the function scope.
-* These macros automatically attach the specified `fields(...)` and `custom(...)` values to every log.
-
-Example:
+When working with async code, especially when moving values into `async move` blocks or `tokio::spawn`, you might encounter ownership issues. The `clone_upfront` option addresses this by ensuring fields can be safely used throughout your async function:
 
 ```rust
-info!("Welcome");
+use log_args::params;
+use tracing::info;
 
-↓ expands to ↓
+#[derive(Debug, Clone)]
+struct Client { id: String, name: String }
 
-tracing::info!(
-    user_id = ?user.id,
-    service = "auth",
-    "Welcome"
-);
+#[params(clone_upfront, fields(client.id, client.name))]
+async fn process_client(client: Client) {
+    info!("Starting client processing");
+    
+    // Move client into an async block
+    let task = tokio::spawn(async move {
+        // Use client here without ownership issues
+        info!("Processing client in spawned task");
+        client
+    });
+    
+    // Logs still work even though client was moved
+    // because values were cloned upfront
+    info!("Waiting for client processing to complete");
+}
 ```
 
-This makes logging consistent and easy to use without spans or boilerplate.
+The `clone_upfront` option is particularly useful when:
+- You need to move values into `async move` blocks
+- You're using `tokio::spawn` or similar functions
+- You want to log values even after they've been moved
 
 ---
 
-## ❗ Limitations
+## 🛠️ Feature Reference
 
-* Logging context is **local to the annotated function**.
-* Subfunctions **do not inherit** logged fields. To share context across calls, use `tracing::span!` manually.
-* Field expressions like `user.name.first` (deep chaining) are not yet supported.
+### Attribute Options
+
+| Option | Description | Example |
+|--------|-------------|----------|
+| `fields(...)` | Specify which fields to log | `#[params(fields(user.id, count))]` |
+| `custom(...)` | Add custom key-value pairs | `#[params(custom(version = "1.0"))]` |
+| `clone_upfront` | Clone fields for safe use in async contexts | `#[params(clone_upfront)]` |
+
+### Logging Options
+
+The `#[params]` macro redefines the following `tracing` macros within the function body:
+- `info!`
+- `warn!`
+- `error!`
+- `debug!`
+- `trace!`
+
+Use these macros as you normally would - the function arguments will be automatically included in the output.
 
 ---
 
-## 🧪 Testing & Test Coverage
+## 📋 Examples
 
-This macro is tested using [`trybuild`](https://docs.rs/trybuild), covering the following:
+Check out the examples directory for more detailed usage patterns:
 
-| Test Case                      | Description                                |
-| ------------------------------ | ------------------------------------------ |
-| ✅ All arguments                | Logs all function inputs                   |
-| ✅ Selected fields              | Logs only selected parameters              |
-| ✅ Subfield logging             | Logs nested fields like `user.id`          |
-| ✅ Custom fields                | Includes hardcoded `"key" = "value"` pairs |
-| ✅ Async function support       | Works with `async fn`                      |
-| ✅ Invalid input compile errors | Ensures robust syntax validation           |
-| ❌ No automatic log propagation | Logs in subfunctions won't include context |
+- `examples/basic.rs`: Basic usage with all arguments
+- `examples/selected_fields.rs`: Logging specific fields
+- `examples/custom_fields.rs`: Adding custom key-value pairs
+- `examples/async_function.rs`: Usage with async functions
+- `examples/async_clone_upfront.rs`: Using `clone_upfront` with async functions
+- `examples/subfields.rs`: Logging nested struct fields
+
+---
+
+## 🔍 How It Works
+
+The `#[params]` macro:
+
+1. Analyzes the function signature to find available arguments
+2. Processes attribute options like `fields(...)` and `custom(...)`
+3. Redefines tracing macros within the function scope to automatically include the specified fields
+4. With `clone_upfront`, ensures values are safely cloned to prevent ownership issues in async contexts
+
+The macro does not add overhead beyond the normal cost of logging and cloning when needed.
+
+---
+
+## ⚠️ Limitations
+
+- The `#[params]` macro redefines tracing macros within function scope, which may generate unused macro warnings if not all redefined macros are used (these are suppressed internally)
+- When using `clone_upfront`, fields must implement `Clone`
+- Deeply nested or complex field expressions may not be properly captured
+- Currently, directly using a struct in a field expression (e.g., `fields(user)` instead of `fields(user.id)`) may not work as expected; use individual fields instead
+
+---
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ---
 
@@ -205,6 +286,21 @@ WARN login: user_id=42 user_name="Alice" service="auth" Invalid password
 
 ---
 
+**❌ Incorrect usage:**
+```rust
+#[params]
+fn foo() {
+    tracing::debug!("debug message"); // will NOT be enriched
+}
+```
+
+**Always import the macros you use:**
+```rust
+use tracing::{debug, info, warn, error};
+```
+
+---
+
 ## 🔮 Future Enhancements
 
 * `#[log_args(span = true)]`: Optional span-based logging for subfunction support
@@ -227,4 +323,4 @@ PRs, issues, and feedback are welcome. Let’s make logging in Rust ergonomic an
 
 ## 📫 Contact
 
-Maintained by \[YourNameHere] • Feel free to reach out via GitHub Issues.
+Maintained by \[MKJS Tech](mailto:mkjsm57@gmail.com) • Feel free to reach out via [mail](mailto:mkjsm57@gmail.com) or [GitHub Issues](https://github.com/MKJSM/log-args/issues).

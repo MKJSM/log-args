@@ -1,4 +1,4 @@
-use log_args::log_args;
+use log_args::params;
 use tracing::{debug, error, info, warn};
 
 #[derive(Debug)]
@@ -8,7 +8,7 @@ struct User {
     name: String,
 }
 
-#[log_args]
+#[params(fields(user.id, user.name))]
 #[allow(dead_code, unused_variables)]
 fn process(user: User) {
     info!("Info log");

@@ -1,4 +1,4 @@
-use log_args::log_args;
+use log_args::params;
 
 #[derive(Debug)]
 struct User {
@@ -7,7 +7,7 @@ struct User {
 }
 
 // This should fail because `fields` is misspelled
-#[log_args(field(user.id))]
+#[params(field(user.id))]
 fn process(user: User) {}
 
 fn main() {}

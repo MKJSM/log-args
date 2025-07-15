@@ -1,4 +1,4 @@
-use log_args::log_args;
+use log_args::params;
 use tracing::{debug, error, info, warn};
 
 #[derive(Debug, Clone)]
@@ -14,25 +14,25 @@ struct Config {
 }
 
 // Log all arguments
-#[log_args]
-fn my_handler_all(user: User, config: Config) {
+#[params]
+fn my_handler_all(_user: User, _config: Config) {
     info!("Handler invoked");
 }
 
 // Log specific arguments
-#[log_args(fields(user, config))]
+#[params(fields(user.id, config.debug))]
 fn my_handler_fields(user: User, config: Config) {
     info!("Fields filtered");
 }
 
 // Log subfields
-#[log_args(fields(user.id, user.name))]
+#[params(fields(user.id, user.name))]
 fn my_handler_subfields(user: User) {
     warn!("User processing failed");
 }
 
 // Log with custom key-value pairs
-#[log_args(fields(user.id), custom(service = "auth", env = "prod"))]
+#[params(fields(user.id), custom(service = "auth", env = "prod"))]
 fn login(user: User) {
     info!("Login attempt started");
     debug!("test debug logging also");
@@ -40,7 +40,7 @@ fn login(user: User) {
 }
 
 // Log from async functions
-#[log_args(fields(user.id))]
+#[params(fields(user.id))]
 async fn send_email(user: User) {
     info!("Email triggered");
 }
