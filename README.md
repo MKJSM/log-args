@@ -8,7 +8,17 @@
 
 A simple procedural macro to log function arguments using the `tracing` crate.
 
-This crate provides a procedural macro attribute `#[log_args]` that can be applied to functions to automatically log their arguments. It is designed to be simple, efficient, and easy to integrate into any project that uses `tracing` for structured logging.
+This crate provides a procedural macro attribute `#[params]` that can be applied to functions to automatically log their arguments. It is designed to be simple, efficient, and easy to integrate into any project that uses `tracing` for structured logging.
+
+---
+
+## 🚀 Overview
+
+- **Macro name:** `#[params]`
+- **Purpose:** Automatically logs function arguments and custom fields using the `tracing` macros (`info!`, `debug!`, etc.), with no span-related features.
+- **Works with:** Both synchronous and asynchronous functions.
+
+---
 
 ---
 
@@ -19,7 +29,9 @@ This crate provides a procedural macro attribute `#[log_args]` that can be appli
 - **Log nested fields** of struct arguments (e.g., `user.id`).
 - **Add custom key-value pairs** to the log output using `custom(...)`.
 - Supports both **synchronous and asynchronous functions**.
-- All logging is done through the `tracing` ecosystem, which means it has **zero-overhead** when disabled.
+- All logging is done through the `tracing` macros (`info!`, `debug!`, `warn!`, `error!`, `trace!`).
+- **No tracing spans or span-related features are used.**
+- **No `level` attribute**: The macro does not accept a `level` parameter; use the desired `tracing` macro directly in your function body.
 
 ---
 
@@ -29,7 +41,7 @@ Add `log_args` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-log_args = "0.1.0" # Replace with the latest version from crates.io
+log_args = "0.1" # Replace with the latest version from crates.io
 tracing = "0.1"
 ```
 
@@ -39,16 +51,16 @@ tracing = "0.1"
 
 ### 1. Log All Arguments
 
-By default, `#[log_args]` logs all arguments of a function.
+By default, `#[params]` logs all arguments of a function.
 
 ```rust
-use log_args::log_args;
+use log_args::params;
 use tracing::info;
 
 #[derive(Debug)]
 struct User { id: u32 }
 
-#[log_args]
+#[params]
 fn process_user(user: User, task_id: i32) {
     info!("Processing task");
 }
@@ -59,22 +71,22 @@ fn process_user(user: User, task_id: i32) {
 
 ### 2. Log Specific Fields
 
-Use `fields(...)` to select which arguments or subfields to log.
+You can specify which arguments or fields to log using the `fields(...)` attribute:
 
 ```rust
-use log_args::log_args;
-use tracing::warn;
+use log_args::params;
+use tracing::info;
 
 #[derive(Debug)]
 struct User { id: u32, name: String }
 
-#[log_args(fields(user.id))]
-fn process_user(user: User) {
-    warn!("Processing failed");
+#[params(fields(user.id, user.name))]
+fn process_user(user: User, task_id: i32) {
+    info!("Processing task");
 }
 
 // Log output will be similar to:
-// WARN Processing failed user_id=42
+// INFO Processing task user_id=42 user_name="Alice"
 ```
 
 ### 3. Add Custom Key-Value Pairs
@@ -82,13 +94,13 @@ fn process_user(user: User) {
 Use `custom(...)` to add static key-value pairs to your logs.
 
 ```rust
-use log_args::log_args;
+use log_args::params;
 use tracing::info;
 
 #[derive(Debug)]
 struct User { id: u32 }
 
-#[log_args(fields(user.id), custom(service = "auth", env = "production"))]
+#[params(fields(user.id), custom(service = "auth", env = "production"))]
 fn authenticate(user: User) {
     info!("Login attempt");
 }
@@ -102,13 +114,13 @@ fn authenticate(user: User) {
 The macro works seamlessly with `async` functions.
 
 ```rust
-use log_args::log_args;
+use log_args::params;
 use tracing::info;
 
 #[derive(Debug)]
 struct User { email: String }
 
-#[log_args(fields(user.email))]
+#[params(fields(user.email))]
 async fn send_email(user: User) {
     info!("Sending confirmation email");
     // ... async logic ...
@@ -119,14 +131,26 @@ For more detailed examples, please see the [examples directory](https://github.c
 
 ---
 
-## 📜 License
+## ⚠️ Limitations
 
-This project is licensed under the MIT License. See the [LICENSE](https://github.com/MKJSM/log-args/blob/main/LICENSE) file for details.
+- Only works with the `tracing` crate macros (`info!`, `debug!`, `warn!`, `error!`, `trace!`).
+- **No span support:** The macro does not create or use spans.
+- **No log level attribute:** You must use the desired `tracing` macro directly in your function body.
+- All arguments you wish to log must implement `Debug`.
 
-## 🤝 Contributing
+---
 
-Contributions are welcome! Please feel free to submit a pull request or open an issue.
+## 📝 License
 
+This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
+
+---
+
+## 📚 Contributing & Support
+
+- PRs and issues are welcome!
+- See the examples directory for more advanced usage.
+- For questions or help, please open an issue on GitHub.
 
 ---
 
@@ -205,6 +229,21 @@ WARN login: user_id=42 user_name="Alice" service="auth" Invalid password
 
 ---
 
+**❌ Incorrect usage:**
+```rust
+#[params]
+fn foo() {
+    tracing::debug!("debug message"); // will NOT be enriched
+}
+```
+
+**Always import the macros you use:**
+```rust
+use tracing::{debug, info, warn, error};
+```
+
+---
+
 ## 🔮 Future Enhancements
 
 * `#[log_args(span = true)]`: Optional span-based logging for subfunction support
@@ -227,4 +266,4 @@ PRs, issues, and feedback are welcome. Let’s make logging in Rust ergonomic an
 
 ## 📫 Contact
 
-Maintained by \[YourNameHere] • Feel free to reach out via GitHub Issues.
+Maintained by \[MKJS Tech](mailto:mkjsm57@gmail.com) • Feel free to reach out via [mail](mailto:mkjsm57@gmail.com) or [GitHub Issues](https://github.com/MKJSM/log-args/issues).

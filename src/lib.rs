@@ -1,45 +1,75 @@
-//! # log_args
+//! # log-args: Procedural Macro for Logging Function Arguments
 //!
-//! A simple procedural macro to log function arguments using the `tracing` crate.
-//!
-//! This crate provides a procedural macro attribute `#[log_args]` that can be applied to functions
-//! to automatically log their arguments. It is designed to be simple, efficient, and easy to integrate
-//! into any project that uses `tracing` for structured logging.
+//! This crate provides the `#[params]` attribute macro to automatically log function arguments using the `tracing` crate.
 //!
 //! ## Features
+//! - Log all function arguments by default
+//! - Select specific arguments or fields to log
+//! - Add custom key-value pairs to log output
+//! - No tracing spans or span-related features used
+//! - Compatible with both sync and async functions
 //!
-//! - Log all function arguments by default.
-//! - Select specific arguments to log.
-//! - Log nested fields of struct arguments (e.g., `user.id`).
-//! - Add custom key-value pairs to the log output.
-//! - Supports both synchronous and asynchronous functions.
-//! - All logging is done through the `tracing` ecosystem, which means it has zero-overhead when disabled.
+//! ## Usage
 //!
-//! For more examples, see the [examples directory](https://github.com/MKJSM/log-args/tree/main/examples) on GitHub.
+//! ```rust
+//! use log_args::params;
+//! use tracing::info;
+//!
+//! #[derive(Debug)]
+//! struct User { id: u32, name: String }
+//!
+//! #[params]
+//! fn foo(user: User, count: usize) {
+//!     info!("Function called");
+//! }
+//! ```
+//!
+//! ## Macro Attributes
+//! - `fields(...)`: Log only the specified arguments or fields (e.g., `fields(user.id, count)`).
+//! - `custom(...)`: Add custom key-value pairs to the log output (e.g., `custom(service = "auth")`).
+//!
+//! ## Example
+//!
+//! ```rust
+//! #[params(fields(user.id), custom(service = "auth"))]
+//! fn login(user: User) {
+//!     info!("User login");
+//! }
+//! ```
+//!
+//! ## Limitations
+//! - Only works with the `tracing` crate macros (`info!`, `debug!`, `warn!`, `error!`, `trace!`).
+//! - Does not support span creation or level selection via macro input.
+//! - All arguments must implement `Debug` for structured logging.
+//!
+//! See the README and examples for more details.
 
 extern crate proc_macro;
 
 use proc_macro::TokenStream;
-use quote::{quote, ToTokens};
+use quote::quote;
 use syn::parse::{Parse, ParseStream, Result};
 use syn::punctuated::Punctuated;
-use syn::{Expr, ItemFn, Meta, MetaNameValue, Token};
+use syn::{spanned::Spanned, Expr, ItemFn, Meta, MetaNameValue, Pat, Token};
 
-/// A struct to parse the arguments passed to the `log_args` macro.
+/// Parsed arguments for the `#[params]` macro.
 ///
-/// It supports two types of arguments:
-/// - `fields(...)`: A list of expressions to be logged.
-/// - `custom(...)`: A list of key-value pairs to be added to the log.
+/// - `fields`: List of expressions (arguments or fields) to log.
+/// - `custom`: List of custom key-value pairs to add to the log.
 struct LogArgs {
     fields: Vec<Expr>,
     custom: Vec<MetaNameValue>,
 }
 
 impl Parse for LogArgs {
-    /// Parses the token stream from the macro attribute into a `LogArgs` struct.
+    /// Parses the `fields(...)` and `custom(...)` attributes for the macro.
     fn parse(input: ParseStream) -> Result<Self> {
         let mut fields = Vec::new();
         let mut custom = Vec::new();
+
+        if input.is_empty() {
+            return Ok(LogArgs { fields, custom });
+        }
 
         let metas = Punctuated::<Meta, Token![,]>::parse_terminated(input)?;
 
@@ -47,13 +77,10 @@ impl Parse for LogArgs {
             match meta {
                 Meta::List(list) => {
                     if list.path.is_ident("fields") {
-                        let nested =
-                            list.parse_args_with(Punctuated::<Expr, Token![,]>::parse_terminated)?;
+                        let nested = list.parse_args_with(Punctuated::<Expr, Token![,]>::parse_terminated)?;
                         fields.extend(nested);
                     } else if list.path.is_ident("custom") {
-                        let nested = list.parse_args_with(
-                            Punctuated::<MetaNameValue, Token![,]>::parse_terminated,
-                        )?;
+                        let nested = list.parse_args_with(Punctuated::<MetaNameValue, Token![,]>::parse_terminated)?;
                         custom.extend(nested);
                     } else {
                         return Err(syn::Error::new_spanned(
@@ -66,7 +93,7 @@ impl Parse for LogArgs {
                     return Err(syn::Error::new_spanned(
                         meta,
                         "Unsupported attribute format, expected `fields(...)` or `custom(...)`",
-                    ))
+                    ));
                 }
             }
         }
@@ -75,79 +102,65 @@ impl Parse for LogArgs {
     }
 }
 
-/// A procedural macro to automatically log function arguments.
+/// Procedural macro to log function arguments using the `tracing` macros.
 ///
-/// By default, it logs all arguments. You can customize its behavior by passing arguments.
-///
-/// # Attributes
-///
-/// - `fields(arg1, arg2, ...)`: Logs only the specified arguments or their subfields.
-/// - `custom(key1 = "value1", key2 = "value2", ...)`: Adds custom key-value pairs to the log output.
-///
-/// # Examples
-///
-/// ## Logging all arguments
+/// # Usage
 ///
 /// ```rust
-/// use log_args::log_args;
-/// use tracing::info;
-///
-/// #[derive(Debug)]
-/// struct User { id: u32 }
-///
-/// #[log_args]
-/// fn process(user: User, task_id: i32) {
-///     info!("Processing task");
+/// #[params]
+/// fn foo(arg1: i32, arg2: String) {
+///     info!("Called foo");
 /// }
 ///
-/// // When called, this will produce a log similar to:
-/// // INFO Processing task user=User { id: 42 } task_id=42
-/// ```
-///
-/// ## Logging selected fields and custom values
-///
-/// ```rust
-/// use log_args::log_args;
-/// use tracing::info;
-///
-/// #[derive(Debug)]
-/// struct User { id: u32, name: String }
-///
-/// #[log_args(fields(user.id), custom(service = "auth"))]
-/// fn authenticate(user: User) {
-///     info!("Authenticating user");
+/// #[params(fields(arg1), custom(service = "api"))]
+/// fn bar(arg1: i32, arg2: String) {
+///     info!("Called bar");
 /// }
-///
-/// // When called, this will produce a log similar to:
-/// // INFO Authenticating user user_id=42 service="auth"
 /// ```
+///
+/// - Use `fields(...)` to select which arguments/fields to log.
+/// - Use `custom(...)` to add custom key-value pairs.
+///
+/// Only `tracing` macros are supported. No spans are created.
 #[proc_macro_attribute]
-pub fn log_args(args: TokenStream, input: TokenStream) -> TokenStream {
-    let log_args = syn::parse_macro_input!(args as LogArgs);
-    let mut func = syn::parse_macro_input!(input as ItemFn);
+pub fn params(args: TokenStream, input: TokenStream) -> TokenStream {
+    let params: LogArgs = match syn::parse(args) {
+        Ok(params) => params,
+        Err(e) => return e.to_compile_error().into(),
+    };
 
-    let mut span_fields = vec![];
+    let mut func: ItemFn = match syn::parse(input) {
+        Ok(func) => func,
+        Err(e) => return e.to_compile_error().into(),
+    };
 
-    if log_args.fields.is_empty() && log_args.custom.is_empty() {
-        for arg in &func.sig.inputs {
-            if let syn::FnArg::Typed(pat_type) = arg {
-                if let syn::Pat::Ident(pat_ident) = &*pat_type.pat {
-                    let ident = &pat_ident.ident;
-                    span_fields.push(quote! { #ident = ?#ident });
+    let log_fields: Vec<_> = if params.fields.is_empty() {
+        func.sig
+            .inputs
+            .iter()
+            .filter_map(|arg| {
+                if let syn::FnArg::Typed(pat_type) = arg {
+                    if let Pat::Ident(pat_ident) = &*pat_type.pat {
+                        let ident = &pat_ident.ident;
+                        return Some(quote! { #ident = ?#ident });
+                    }
                 }
-            }
-        }
+                None
+            })
+            .collect()
     } else {
-        for path in log_args.fields {
-            let field_key = syn::Ident::new(
-                &path.to_token_stream().to_string().replace('.', "_"),
-                proc_macro2::Span::call_site(),
-            );
-            span_fields.push(quote! { #field_key = ?#path.clone() });
-        }
-    }
+        params
+            .fields
+            .iter()
+            .map(|expr| {
+                let expr_str = quote!(#expr).to_string().replace(' ', "").replace('.', "_");
+                let key = syn::Ident::new(&expr_str, expr.span());
+                quote! { #key = ?#expr }
+            })
+            .collect()
+    };
 
-    let custom_fields: Vec<_> = log_args
+    let custom_fields: Vec<_> = params
         .custom
         .iter()
         .map(|nv| {
@@ -157,27 +170,36 @@ pub fn log_args(args: TokenStream, input: TokenStream) -> TokenStream {
         })
         .collect();
 
-    let combined_fields: Vec<_> = span_fields
-        .into_iter()
-        .chain(custom_fields.into_iter())
-        .collect();
+    func.attrs.push(syn::parse_quote! { #[allow(unused_macros)] });
 
     let stmts = &func.block.stmts;
-    let func_name_str = func.sig.ident.to_string();
 
     let tracing_block = quote! {
         {
-            // A `tracing::span` can hold fields and is not bound to a short lifetime.
-            // We use `.clone()` to satisfy the `'static` lifetime requirement for
-            // any fields that are captured by the span.
-            let _log_span = tracing::info_span!(#func_name_str, #(#combined_fields,)*);
-            let _log_guard = _log_span.enter();
+            macro_rules! info {
+                ($($t:tt)*) => { tracing::info!(#(#log_fields,)* #(#custom_fields,)* $($t)*) };
+            }
+            macro_rules! warn {
+                ($($t:tt)*) => { tracing::warn!(#(#log_fields,)* #(#custom_fields,)* $($t)*) };
+            }
+            macro_rules! error {
+                ($($t:tt)*) => { tracing::error!(#(#log_fields,)* #(#custom_fields,)* $($t)*) };
+            }
+            macro_rules! debug {
+                ($($t:tt)*) => { tracing::debug!(#(#log_fields,)* #(#custom_fields,)* $($t)*) };
+            }
+            macro_rules! trace {
+                ($($t:tt)*) => { tracing::trace!(#(#log_fields,)* #(#custom_fields,)* $($t)*) };
+            }
 
             #(#stmts)*
         }
     };
 
-    func.block = syn::parse2(tracing_block).expect("Failed to parse generated code");
+    func.block = match syn::parse2(tracing_block) {
+        Ok(block) => block,
+        Err(e) => return e.to_compile_error().into(),
+    };
 
     TokenStream::from(quote! { #func })
 }
