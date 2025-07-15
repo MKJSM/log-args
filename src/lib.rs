@@ -243,121 +243,143 @@ pub fn params(args: TokenStream, input: TokenStream) -> TokenStream {
     if params_args.clone_upfront {
         // In the clone_upfront mode, we'll use thread-local storage to keep cloned values
         // that can be safely accessed even if the original values are moved
-        
+
         // First, create a unique identifier for this function
         let fn_name = format!("{}", func.sig.ident);
         let fn_id = syn::Ident::new(&fn_name, proc_macro2::Span::call_site());
-        
+
         // Create field names for thread_local storage
-        let tls_var_names = field_exprs_vec.iter().map(|(expr_str, _)| {
-            let safe_name = expr_str.replace('.', "_");
-            let tls_name = format!("__LOG_ARGS_TLS_{}_{}", fn_id, safe_name);
-            (expr_str.clone(), syn::Ident::new(&tls_name, proc_macro2::Span::call_site()))
-        }).collect::<Vec<_>>();
-        
-        let custom_tls_var_names = custom_exprs_vec.iter().map(|(key, _)| {
-            let tls_name = format!("__LOG_ARGS_TLS_{}_{}", fn_id, key);
-            (key.clone(), syn::Ident::new(&tls_name, proc_macro2::Span::call_site()))
-        }).collect::<Vec<_>>();
-        
+        let tls_var_names = field_exprs_vec
+            .iter()
+            .map(|(expr_str, _)| {
+                let safe_name = expr_str.replace('.', "_");
+                let tls_name = format!("__LOG_ARGS_TLS_{fn_id}_{safe_name}");
+                (
+                    expr_str.clone(),
+                    syn::Ident::new(&tls_name, proc_macro2::Span::call_site()),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let custom_tls_var_names = custom_exprs_vec
+            .iter()
+            .map(|(key, _)| {
+                let tls_name = format!("__LOG_ARGS_TLS_{fn_id}_{key}");
+                (
+                    key.clone(),
+                    syn::Ident::new(&tls_name, proc_macro2::Span::call_site()),
+                )
+            })
+            .collect::<Vec<_>>();
+
         // Generate thread_local declarations
         let thread_locals = tls_var_names.iter().map(|(_expr_str, tls_var)| {
             quote! {
                 thread_local! {
-                    static #tls_var: ::std::cell::RefCell<Option<String>> = 
+                    static #tls_var: ::std::cell::RefCell<Option<String>> =
                         ::std::cell::RefCell::new(None);
                 }
             }
         });
-        
+
         let custom_thread_locals = custom_tls_var_names.iter().map(|(_key, tls_var)| {
             quote! {
                 thread_local! {
-                    static #tls_var: ::std::cell::RefCell<Option<String>> = 
+                    static #tls_var: ::std::cell::RefCell<Option<String>> =
                         ::std::cell::RefCell::new(None);
                 }
             }
         });
-        
+
         // Generate thread_local initializations
         let tls_inits = tls_var_names.iter().map(|(expr_str, tls_var)| {
-            let expr_index = field_exprs_vec.iter().position(|(s, _)| s == expr_str).unwrap();
+            let expr_index = field_exprs_vec
+                .iter()
+                .position(|(s, _)| s == expr_str)
+                .unwrap();
             let (_, expr) = &field_exprs_vec[expr_index];
-            
+
             quote! {
                 #tls_var.with(|cell| {
                     *cell.borrow_mut() = Some(format!("{:?}", &#expr));
                 });
             }
         });
-        
+
         let custom_tls_inits = custom_tls_var_names.iter().map(|(key, tls_var)| {
             let custom_index = custom_exprs_vec.iter().position(|(k, _)| k == key).unwrap();
             let (_, value) = &custom_exprs_vec[custom_index];
-            
+
             quote! {
                 #tls_var.with(|cell| {
                     *cell.borrow_mut() = Some(format!("{:?}", &#value));
                 });
             }
         });
-        
+
         // Generate field expressions for tracing macros that reference thread_locals
         let field_exprs = tls_var_names.iter().map(|(expr_str, tls_var)| {
             let key_parts: Vec<&str> = expr_str.split('.').collect();
             let key = key_parts.last().copied().unwrap_or(expr_str.as_str());
-            
+
             quote! { #key = #tls_var.with(|cell| cell.borrow().clone().unwrap_or_default()) }
         });
-        
+
         let custom_exprs = custom_tls_var_names.iter().map(|(key, tls_var)| {
             let key_ident = syn::parse_str::<syn::Path>(key).unwrap();
-            
+
             quote! { #key_ident = #tls_var.with(|cell| cell.borrow().clone().unwrap_or_default()) }
         });
-        
+
         // Collect all field expressions
-        let all_field_exprs: Vec<proc_macro2::TokenStream> = 
+        let all_field_exprs: Vec<proc_macro2::TokenStream> =
             field_exprs.chain(custom_exprs).collect();
         let field_exprs_tokens = quote! { #(#all_field_exprs),* };
-        
+
         // Create a new function body with thread_locals and macro redefinitions
         let new_body = quote! {
             {
+                // Suppress unused macro warnings since not all redefined macros might be used
+                #[allow(unused_macros)]
                 // Define thread_local storage for each field and custom value
                 #(#thread_locals)*
                 #(#custom_thread_locals)*
-                
+
                 // Initialize thread_locals with current values
                 #(#tls_inits)*
                 #(#custom_tls_inits)*
-                
+
                 // Redefine tracing macros to use thread_local values
+                #[allow(unused_macros)]
                 macro_rules! info {
                     () => { tracing::info!(#field_exprs_tokens); };
                     ($($arg:tt)+) => { tracing::info!(#field_exprs_tokens, $($arg)*); };
                 }
-                
+
+                #[allow(unused_macros)]
                 macro_rules! warn {
                     () => { tracing::warn!(#field_exprs_tokens); };
                     ($($arg:tt)+) => { tracing::warn!(#field_exprs_tokens, $($arg)*); };
                 }
-                
+
+                #[allow(unused_macros)]
                 macro_rules! error {
                     () => { tracing::error!(#field_exprs_tokens); };
                     ($($arg:tt)+) => { tracing::error!(#field_exprs_tokens, $($arg)*); };
                 }
-                
+
+                #[allow(unused_macros)]
                 macro_rules! debug {
                     () => { tracing::debug!(#field_exprs_tokens); };
                     ($($arg:tt)+) => { tracing::debug!(#field_exprs_tokens, $($arg)*); };
                 }
-                
+
+                #[allow(unused_macros)]
                 macro_rules! trace {
                     () => { tracing::trace!(#field_exprs_tokens); };
                     ($($arg:tt)+) => { tracing::trace!(#field_exprs_tokens, $($arg)*); };
                 }
-                
+
                 #original_body
             }
         };
@@ -382,23 +404,30 @@ pub fn params(args: TokenStream, input: TokenStream) -> TokenStream {
         // Create a new function body that redefines the tracing macros with inline cloning
         let new_body = quote! {
             {
+                // Suppress unused macro warnings since not all redefined macros might be used
+                #[allow(unused_macros)]
                 // Redefine tracing macros to include our fields with inline cloning
+                #[allow(unused_macros)]
                 macro_rules! info {
                     () => { tracing::info!(#field_exprs_tokens) };
                     ($($arg:tt)+) => { tracing::info!(#field_exprs_tokens, $($arg)*) };
                 }
+                #[allow(unused_macros)]
                 macro_rules! warn {
                     () => { tracing::warn!(#field_exprs_tokens) };
                     ($($arg:tt)+) => { tracing::warn!(#field_exprs_tokens, $($arg)*) };
                 }
+                #[allow(unused_macros)]
                 macro_rules! error {
                     () => { tracing::error!(#field_exprs_tokens) };
                     ($($arg:tt)+) => { tracing::error!(#field_exprs_tokens, $($arg)*) };
                 }
+                #[allow(unused_macros)]
                 macro_rules! debug {
                     () => { tracing::debug!(#field_exprs_tokens) };
                     ($($arg:tt)+) => { tracing::debug!(#field_exprs_tokens, $($arg)*) };
                 }
+                #[allow(unused_macros)]
                 macro_rules! trace {
                     () => { tracing::trace!(#field_exprs_tokens) };
                     ($($arg:tt)+) => { tracing::trace!(#field_exprs_tokens, $($arg)*) };
