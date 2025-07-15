@@ -230,108 +230,27 @@ pub fn params(args: TokenStream, item: TokenStream) -> TokenStream {
     let new_block = if has_span {
         quote! {
             {
-                // Store function name and arguments for use in macros
+                // Create a span with function name and arguments
+                let __span = tracing::span!(
+                    tracing::Level::DEBUG,
+                    #fn_name_token,
+                    function = #fn_name_token,
+                    #(#log_fields,)*
+                    #(#custom_field_tokens,)*
+                );
+                let __span_guard = __span.enter();
+                
+                // Store function name for use in macros
                 let __fn_name = #fn_name_token;
                 
-                // Redefine tracing macros to include our fields
-                // Redefine tracing macros to include our fields
-                macro_rules! trace {
-                    ($msg:expr) => {
-                        tracing::trace!(
-                            function = __fn_name,
-                            #(#log_fields,)*
-                            #(#custom_field_tokens,)*
-                            $msg
-                        )
-                    };
-                    ($fmt:expr, $($arg:tt)*) => {
-                        tracing::trace!(
-                            function = __fn_name,
-                            #(#log_fields,)*
-                            #(#custom_field_tokens,)*
-                            $fmt, $($arg)*
-                        )
-                    };
-                }
+                // Log that the function was called
+                tracing::debug!("Function called");
                 
-                macro_rules! debug {
-                    ($msg:expr) => {
-                        tracing::debug!(
-                            function = __fn_name,
-                            #(#log_fields,)*
-                            #(#custom_field_tokens,)*
-                            $msg
-                        )
-                    };
-                    ($fmt:expr, $($arg:tt)*) => {
-                        tracing::debug!(
-                            function = __fn_name,
-                            #(#log_fields,)*
-                            #(#custom_field_tokens,)*
-                            $fmt, $($arg)*
-                        )
-                    };
-                }
+                // Execute original function body within the span
+                let result = #orig_block;
                 
-                macro_rules! info {
-                    ($msg:expr) => {
-                        tracing::info!(
-                            function = __fn_name,
-                            #(#log_fields,)*
-                            #(#custom_field_tokens,)*
-                            $msg
-                        )
-                    };
-                    ($fmt:expr, $($arg:tt)*) => {
-                        tracing::info!(
-                            function = __fn_name,
-                            #(#log_fields,)*
-                            #(#custom_field_tokens,)*
-                            $fmt, $($arg)*
-                        )
-                    };
-                }
-                
-                macro_rules! warn {
-                    ($msg:expr) => {
-                        tracing::warn!(
-                            function = __fn_name,
-                            #(#log_fields,)*
-                            #(#custom_field_tokens,)*
-                            $msg
-                        )
-                    };
-                    ($fmt:expr, $($arg:tt)*) => {
-                        tracing::warn!(
-                            function = __fn_name,
-                            #(#log_fields,)*
-                            #(#custom_field_tokens,)*
-                            $fmt, $($arg)*
-                        )
-                    };
-                }
-                
-                macro_rules! error {
-                    ($msg:expr) => {
-                        tracing::error!(
-                            function = __fn_name,
-                            #(#log_fields,)*
-                            #(#custom_field_tokens,)*
-                            $msg
-                        )
-                    };
-                    ($fmt:expr, $($arg:tt)*) => {
-                        tracing::error!(
-                            function = __fn_name,
-                            #(#log_fields,)*
-                            #(#custom_field_tokens,)*
-                            $fmt, $($arg)*
-                        )
-                    };
-                }
-                
-                // Execute original function body with redefined macros
-                #orig_block
+                // Return the result
+                result
             }
         }
     } else {
