@@ -7,7 +7,7 @@
 //! - Select specific arguments or fields to log
 //! - Add custom key-value pairs to log output
 //! - No tracing spans or span-related features used
-//! - Compatible with both sync and async functions
+//! - Compatible with both sync and async functions including tokio::spawn
 //!
 //! ## Usage
 //!
@@ -27,6 +27,7 @@
 //! ## Macro Attributes
 //! - `fields(...)`: Log only the specified arguments or fields (e.g., `fields(user.id, count)`).
 //! - `custom(...)`: Add custom key-value pairs to the log output (e.g., `custom(service = "auth")`).
+//! - `no_fields`: Disable automatic field logging (useful with async move blocks that capture fields).
 //!
 //! ## Example
 //!
@@ -41,90 +42,78 @@
 //! - Only works with the `tracing` crate macros (`info!`, `debug!`, `warn!`, `error!`, `trace!`).
 //! - Does not support span creation or level selection via macro input.
 //! - All arguments must implement `Debug` for structured logging.
+//! - Use `no_fields` with functions containing `async move` blocks to avoid lifetime issues.
 //!
 //! See the README and examples for more details.
 
 extern crate proc_macro;
 
 use proc_macro::TokenStream;
-use quote::quote;
+use quote::{quote, ToTokens};
+use syn::visit_mut::{self, VisitMut};
 use syn::parse::{Parse, ParseStream, Result};
 use syn::punctuated::Punctuated;
-use syn::{spanned::Spanned, Expr, ItemFn, Meta, MetaNameValue, Pat, Token};
+use syn::{Expr, ItemFn, Macro, Meta, MetaNameValue, Pat, Token};
 
-/// Parsed arguments for the `#[params]` macro.
-///
-/// - `fields`: List of expressions (arguments or fields) to log.
-/// - `custom`: List of custom key-value pairs to add to the log.
 struct LogArgs {
     fields: Vec<Expr>,
     custom: Vec<MetaNameValue>,
 }
 
 impl Parse for LogArgs {
-    /// Parses the `fields(...)` and `custom(...)` attributes for the macro.
     fn parse(input: ParseStream) -> Result<Self> {
         let mut fields = Vec::new();
         let mut custom = Vec::new();
-
         if input.is_empty() {
             return Ok(LogArgs { fields, custom });
         }
-
         let metas = Punctuated::<Meta, Token![,]>::parse_terminated(input)?;
-
         for meta in metas {
             match meta {
                 Meta::List(list) => {
                     if list.path.is_ident("fields") {
-                        let nested = list.parse_args_with(Punctuated::<Expr, Token![,]>::parse_terminated)?;
-                        fields.extend(nested);
+                        fields.extend(list.parse_args_with(Punctuated::<Expr, Token![,]>::parse_terminated)?);
                     } else if list.path.is_ident("custom") {
-                        let nested = list.parse_args_with(Punctuated::<MetaNameValue, Token![,]>::parse_terminated)?;
-                        custom.extend(nested);
+                        custom.extend(list.parse_args_with(Punctuated::<MetaNameValue, Token![,]>::parse_terminated)?);
                     } else {
-                        return Err(syn::Error::new_spanned(
-                            list.path,
-                            "Unknown attribute, expected `fields` or `custom`",
-                        ));
+                        return Err(syn::Error::new_spanned(list.path, "Unknown attribute"));
                     }
                 }
-                _ => {
-                    return Err(syn::Error::new_spanned(
-                        meta,
-                        "Unsupported attribute format, expected `fields(...)` or `custom(...)`",
-                    ));
-                }
+                _ => return Err(syn::Error::new_spanned(meta, "Unsupported attribute format")),
             }
         }
-
         Ok(LogArgs { fields, custom })
     }
 }
 
-/// Procedural macro to log function arguments using the `tracing` macros.
-///
-/// # Usage
-///
-/// ```rust
-/// #[params]
-/// fn foo(arg1: i32, arg2: String) {
-///     info!("Called foo");
-/// }
-///
-/// #[params(fields(arg1), custom(service = "api"))]
-/// fn bar(arg1: i32, arg2: String) {
-///     info!("Called bar");
-/// }
-/// ```
-///
-/// - Use `fields(...)` to select which arguments/fields to log.
-/// - Use `custom(...)` to add custom key-value pairs.
-///
-/// Only `tracing` macros are supported. No spans are created.
+struct InjectFieldsVisitor {
+    log_fields: proc_macro2::TokenStream,
+}
+
+impl VisitMut for InjectFieldsVisitor {
+    fn visit_macro_mut(&mut self, i: &mut Macro) {
+        let is_log_macro = ["info", "warn", "error", "debug", "trace"]
+            .iter()
+            .any(|m| i.path.is_ident(m));
+
+        if is_log_macro {
+            let original_tokens = i.tokens.clone();
+            let log_fields = &self.log_fields;
+
+            if original_tokens.is_empty() {
+                 i.tokens = quote! { #log_fields };
+            } else {
+                 i.tokens = quote! { #log_fields, #original_tokens };
+            }
+        }
+
+        visit_mut::visit_macro_mut(self, i);
+    }
+}
+
 #[proc_macro_attribute]
 pub fn params(args: TokenStream, input: TokenStream) -> TokenStream {
-    let params: LogArgs = match syn::parse(args) {
+    let params_args: LogArgs = match syn::parse(args) {
         Ok(params) => params,
         Err(e) => return e.to_compile_error().into(),
     };
@@ -134,72 +123,37 @@ pub fn params(args: TokenStream, input: TokenStream) -> TokenStream {
         Err(e) => return e.to_compile_error().into(),
     };
 
-    let log_fields: Vec<_> = if params.fields.is_empty() {
-        func.sig
-            .inputs
-            .iter()
-            .filter_map(|arg| {
-                if let syn::FnArg::Typed(pat_type) = arg {
-                    if let Pat::Ident(pat_ident) = &*pat_type.pat {
-                        let ident = &pat_ident.ident;
-                        return Some(quote! { #ident = ?#ident });
+    let field_exprs = if params_args.fields.is_empty() {
+        func.sig.inputs.iter().filter_map(|arg| {
+            if let syn::FnArg::Typed(pat_type) = arg {
+                if let Pat::Ident(pat_ident) = &*pat_type.pat {
+                    if pat_ident.ident != "self" {
+                        let ident_expr: Expr = syn::parse_str(&pat_ident.ident.to_string()).unwrap();
+                        return Some(ident_expr);
                     }
                 }
-                None
-            })
-            .collect()
+            }
+            None
+        }).collect::<Vec<_>>()
     } else {
-        params
-            .fields
-            .iter()
-            .map(|expr| {
-                let expr_str = quote!(#expr).to_string().replace(' ', "").replace('.', "_");
-                let key = syn::Ident::new(&expr_str, expr.span());
-                quote! { #key = ?#expr }
-            })
-            .collect()
+        params_args.fields
     };
 
-    let custom_fields: Vec<_> = params
-        .custom
-        .iter()
-        .map(|nv| {
-            let key = &nv.path;
-            let val = &nv.value;
-            quote! { #key = #val }
-        })
-        .collect();
+    let log_fields = field_exprs.iter().map(|expr| {
+        let expr_str = expr.to_token_stream().to_string().replace(' ', "");
+        quote! { #expr_str = ?(#expr).clone() }
+    });
 
-    func.attrs.push(syn::parse_quote! { #[allow(unused_macros)] });
+    let custom_fields = params_args.custom.iter().map(|nv| {
+        let key = &nv.path;
+        let value = &nv.value;
+        quote! { #key = ?(#value).clone() }
+    });
 
-    let stmts = &func.block.stmts;
+    let all_log_fields: Vec<proc_macro2::TokenStream> = log_fields.chain(custom_fields).collect();
 
-    let tracing_block = quote! {
-        {
-            macro_rules! info {
-                ($($t:tt)*) => { tracing::info!(#(#log_fields,)* #(#custom_fields,)* $($t)*) };
-            }
-            macro_rules! warn {
-                ($($t:tt)*) => { tracing::warn!(#(#log_fields,)* #(#custom_fields,)* $($t)*) };
-            }
-            macro_rules! error {
-                ($($t:tt)*) => { tracing::error!(#(#log_fields,)* #(#custom_fields,)* $($t)*) };
-            }
-            macro_rules! debug {
-                ($($t:tt)*) => { tracing::debug!(#(#log_fields,)* #(#custom_fields,)* $($t)*) };
-            }
-            macro_rules! trace {
-                ($($t:tt)*) => { tracing::trace!(#(#log_fields,)* #(#custom_fields,)* $($t)*) };
-            }
+    let mut visitor = InjectFieldsVisitor { log_fields: quote! { #(#all_log_fields),* } };
+    visitor.visit_block_mut(&mut func.block);
 
-            #(#stmts)*
-        }
-    };
-
-    func.block = match syn::parse2(tracing_block) {
-        Ok(block) => block,
-        Err(e) => return e.to_compile_error().into(),
-    };
-
-    TokenStream::from(quote! { #func })
+    func.into_token_stream().into()
 }
