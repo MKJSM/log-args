@@ -20,7 +20,7 @@
 extern crate proc_macro;
 
 use proc_macro::TokenStream;
-use quote::quote;
+use quote::{quote, ToTokens};
 use syn::parse::{Parse, ParseStream, Result};
 use syn::punctuated::Punctuated;
 use syn::{Expr, ItemFn, Meta, MetaNameValue, Token};
@@ -126,31 +126,26 @@ pub fn log_args(args: TokenStream, input: TokenStream) -> TokenStream {
     let log_args = syn::parse_macro_input!(args as LogArgs);
     let mut func = syn::parse_macro_input!(input as ItemFn);
 
-    let mut fields_to_log = vec![];
+    let mut span_fields = vec![];
 
     if log_args.fields.is_empty() && log_args.custom.is_empty() {
         for arg in &func.sig.inputs {
             if let syn::FnArg::Typed(pat_type) = arg {
                 if let syn::Pat::Ident(pat_ident) = &*pat_type.pat {
                     let ident = &pat_ident.ident;
-                    fields_to_log.push(quote! { #ident });
+                    span_fields.push(quote! { #ident = ?#ident });
                 }
             }
         }
     } else {
         for path in log_args.fields {
-            fields_to_log.push(quote! { #path });
+            let field_key = syn::Ident::new(
+                &path.to_token_stream().to_string().replace('.', "_"),
+                proc_macro2::Span::call_site(),
+            );
+            span_fields.push(quote! { #field_key = ?#path.clone() });
         }
     }
-
-    let log_fields: Vec<_> = fields_to_log
-        .iter()
-        .map(|field| {
-            let field_str = field.to_string().replace(' ', "");
-            let key = syn::Ident::new(&field_str.replace('.', "_"), proc_macro2::Span::call_site());
-            quote! { #key = ?#field }
-        })
-        .collect();
 
     let custom_fields: Vec<_> = log_args
         .custom
@@ -162,34 +157,23 @@ pub fn log_args(args: TokenStream, input: TokenStream) -> TokenStream {
         })
         .collect();
 
+    let combined_fields: Vec<_> = span_fields
+        .into_iter()
+        .chain(custom_fields.into_iter())
+        .collect();
+
     let stmts = &func.block.stmts;
+    let func_name_str = func.sig.ident.to_string();
+
     let tracing_block = quote! {
         {
-            #[allow(unused_macros)]
-            {
-                macro_rules! info {
-                    ($($t:tt)*) => {
-                        tracing::info!(#(#log_fields,)* #(#custom_fields,)* $($t)*)
-                    };
-                }
-                macro_rules! warn {
-                    ($($t:tt)*) => {
-                        tracing::warn!(#(#log_fields,)* #(#custom_fields,)* $($t)*)
-                    };
-                }
-                macro_rules! error {
-                    ($($t:tt)*) => {
-                        tracing::error!(#(#log_fields,)* #(#custom_fields,)* $($t)*)
-                    };
-                }
-                macro_rules! debug {
-                    ($($t:tt)*) => {
-                        tracing::debug!(#(#log_fields,)* #(#custom_fields,)* $($t)*)
-                    };
-                }
+            // A `tracing::span` can hold fields and is not bound to a short lifetime.
+            // We use `.clone()` to satisfy the `'static` lifetime requirement for
+            // any fields that are captured by the span.
+            let _log_span = tracing::info_span!(#func_name_str, #(#combined_fields,)*);
+            let _log_guard = _log_span.enter();
 
-                #(#stmts)*
-            }
+            #(#stmts)*
         }
     };
 
