@@ -1,11 +1,11 @@
-use log_args::log_args;
+use log_args::params;
 use tracing::info;
 
 #[derive(Debug)]
 #[allow(dead_code)]
 struct User { id: u32, name: String }
 
-#[log_args(fields(user.id))]
+#[params(fields(user.id))]
 #[allow(dead_code, unused_variables)]
 async fn process(user: User) {
     info!("Processing");
