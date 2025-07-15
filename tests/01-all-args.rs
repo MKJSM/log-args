@@ -1,7 +1,8 @@
 use log_args::params;
 use tracing::info;
+use serde::Serialize;
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 #[allow(dead_code)]
 struct User {
     id: u32,

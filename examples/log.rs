@@ -1,13 +1,14 @@
 use log_args::params;
+use serde::{Deserialize, Serialize};
 use tracing::{debug, error, info, warn};
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 struct User {
     id: u32,
     name: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 #[allow(dead_code)]
 struct Config {
     debug: bool,

@@ -15,3 +15,6 @@ categories = ["development-tools::debugging"]
 [lib]
 name = "log_args_runtime"
 path = "src/lib.rs"
+
+[dependencies]
+tracing = "0.1"
