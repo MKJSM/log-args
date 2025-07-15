@@ -1,15 +1,17 @@
-//! # log-args: Procedural Macro for Logging Function Arguments
+//! # log-args: Procedural Macro for Logging Function Arguments with Async Support
 //!
-//! This crate provides the `#[params]` attribute macro to automatically log function arguments using the `tracing` crate.
+//! This crate provides the `#[params]` attribute macro to automatically log function arguments using the `tracing` crate,
+//! with special support for handling ownership in asynchronous contexts.
 //!
 //! ## Features
-//! - Log only explicitly specified arguments or fields
+//! - Log all function arguments automatically or select specific ones
+//! - Log nested fields of struct arguments (e.g., `user.id`)
 //! - Add custom key-value pairs to log output
-//! - No tracing spans or span-related features used
-//! - Compatible with both sync and async functions
-//! - Handles ownership correctly in async contexts
+//! - Compatible with both synchronous and asynchronous functions
+//! - Special `clone_upfront` option for handling ownership in async move blocks and spawned tasks
+//! - No tracing spans or span-related features used - just simple structured logging
 //!
-//! ## Usage
+//! ## Basic Usage
 //!
 //! ```rust
 //! use log_args::params;
@@ -18,19 +20,75 @@
 //! #[derive(Debug)]
 //! struct User { id: u32, name: String }
 //!
-//! #[params(fields(user.id, user.name))]
-//! fn foo(user: User, count: usize) {
-//!     info!("Function called"); // Will include user.id and user.name
+//! // Log all arguments
+//! #[params]
+//! fn process_user(user: User, count: usize) {
+//!     info!("Processing user data");
+//!     // Logs: INFO process_user: Processing user data user=User { id: 42, name: "Alice" } count=5
+//! }
+//!
+//! // Log only specific fields
+//! #[params(fields(user.id, count))]
+//! fn validate_user(user: User, count: usize) {
+//!     info!("Validating user");
+//!     // Logs: INFO validate_user: Validating user user.id=42 count=5
+//! }
+//!
+//! // Add custom values
+//! #[params(custom(service = "auth", version = "1.0"))]
+//! fn authenticate(user: User) {
+//!     info!("Authentication attempt");
+//!     // Logs: INFO authenticate: Authentication attempt user=User { id: 42, name: "Alice" } service="auth" version="1.0"
+//! }
+//! ```
+//!
+//! ## Advanced: Async Support with `clone_upfront`
+//!
+//! When working with asynchronous code, especially when moving values into `async move` blocks or
+//! `tokio::spawn`, you might encounter ownership issues. The `clone_upfront` option addresses this
+//! by ensuring fields can be safely used throughout your async function:
+//!
+//! ```rust
+//! use log_args::params;
+//! use tracing::info;
+//!
+//! #[derive(Debug, Clone)]
+//! struct Client { id: String, name: String }
+//!
+//! #[params(clone_upfront, fields(client.id, client.name))]
+//! async fn process_client(client: Client) {
+//!     info!("Starting client processing");
+//!     
+//!     // Move client into an async block
+//!     let task = tokio::spawn(async move {
+//!         // Use client here without ownership issues
+//!         // ...
+//!         client
+//!     });
+//!     
+//!     // Logs still work even though client was moved
+//!     // because values were cloned upfront
+//!     info!("Waiting for client processing to complete");
 //! }
 //! ```
 //!
 //! ## Macro Attributes
-//! - `fields(...)`: Log only the specified arguments or fields (e.g., `fields(user.id, count)`).
-//! - `custom(...)`: Add custom key-value pairs to the log output (e.g., `custom(service = "auth")`).
-//! - `clone_upfront`: Clone all fields at the beginning of the function instead of inline in each tracing macro call.
-//!   This is useful for async functions with `tokio::spawn` to avoid ownership issues.
 //!
-//! ## Using with Async Code
+//! - `fields(...)`: Log only the specified arguments or fields (e.g., `fields(user.id, count)`).
+//!   This is useful for reducing log verbosity or accessing nested fields of struct arguments.
+//!
+//! - `custom(...)`: Add custom key-value pairs to the log output (e.g., `custom(service = "auth")`).
+//!   This allows adding static context to your logs that isn't directly from function arguments.
+//!
+//! - `clone_upfront`: Clone fields upfront to avoid ownership issues in async contexts. This is particularly
+//!   useful when working with `async move` blocks or spawned tasks where the original variables are moved.
+//!
+//! ## How It Works
+//!
+//! The `#[params]` macro redefines the tracing macros (`info!`, `warn!`, `error!`, `debug!`, `trace!`)
+//! within the function body to automatically include the specified function arguments or fields in the
+//! log output. For `clone_upfront`, it generates code that safely handles ownership by cloning values
+//! as needed to ensure they're available throughout the function execution.
 //!
 //! When using with async functions, especially those containing `tokio::spawn` with `async move` blocks,
 //! be careful about ownership and lifetimes. There are three patterns for handling this:
@@ -120,13 +178,49 @@ use syn::{
     Expr, ExprLit, ItemFn, Lit, Meta, MetaNameValue, Token,
 };
 
+/// Represents the parsed arguments of the `#[params]` attribute macro.
+///
+/// This struct holds the configuration for how function arguments should be logged:
+/// - Which specific fields to log (if any)
+/// - Any custom key-value pairs to include in logs
+/// - Whether to clone fields upfront for async safety
+///
+/// When no fields are specified, all function arguments will be logged.
 struct LogArgs {
+    /// Expressions representing specific fields to log (e.g., `user.id`, `count`)
     fields: Vec<Expr>,
+
+    /// Custom key-value pairs to include in logs (e.g., `service = "auth"`)
     custom: Vec<MetaNameValue>,
+
+    /// Whether to clone fields upfront at the beginning of the function
+    /// This is useful for async functions with `tokio::spawn` or `async move` blocks
+    /// to avoid ownership issues
     clone_upfront: bool,
 }
 
 impl Parse for LogArgs {
+    /// Parses the arguments of the `#[params]` attribute macro.
+    ///
+    /// This method handles three types of arguments:
+    /// - `fields(...)`: Expressions representing specific fields to log
+    /// - `custom(...)`: Custom key-value pairs to include in logs
+    /// - `clone_upfront`: A flag to enable upfront cloning for async safety
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// #[params] // No arguments - log all function parameters
+    /// #[params(fields(user.id, count))] // Log only specific fields
+    /// #[params(custom(service = "auth"))] // Add custom key-value pairs
+    /// #[params(clone_upfront)] // Clone fields upfront for async safety
+    /// #[params(fields(user.id), custom(service = "auth"), clone_upfront)] // Combined
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if invalid attribute syntax is used or if unknown attributes
+    /// are provided.
     fn parse(input: ParseStream) -> Result<Self> {
         let mut fields = Vec::new();
         let mut custom = Vec::new();
@@ -192,8 +286,7 @@ impl Parse for LogArgs {
                             "Unknown attribute",
                         ));
                     }
-                } // All Meta variants (List, Path, NameValue) are handled above
-                  // No catch-all pattern needed
+                }
             }
         }
 
@@ -205,6 +298,77 @@ impl Parse for LogArgs {
     }
 }
 
+/// A procedural macro attribute for automatically logging function arguments.
+///
+/// This macro modifies functions to automatically log their arguments when tracing macros
+/// are called within the function body. It redefines the standard tracing macros
+/// (`info!`, `warn!`, `error!`, `debug!`, `trace!`) within the function scope to include
+/// the specified function arguments or fields in every log message.
+///
+/// # Usage Options
+///
+/// - `#[params]` - Log all function arguments
+/// - `#[params(fields(arg1, arg2.field))]` - Log only specific arguments or fields
+/// - `#[params(custom(key = "value"))]` - Add custom key-value pairs to logs
+/// - `#[params(clone_upfront)]` - Clone fields upfront for async safety
+/// - Any combination of the above
+///
+/// # Examples
+///
+/// Basic usage - log all arguments:
+/// ```rust
+/// #[params]
+/// fn process_order(order_id: u32, user: User) {
+///     info!("Processing order"); // Logs all arguments
+/// }
+/// ```
+///
+/// Log specific fields:
+/// ```rust
+/// #[params(fields(user.id, item_count))]
+/// fn process_order(order_id: u32, user: User, item_count: usize) {
+///     info!("Processing order"); // Logs only user.id and item_count
+/// }
+/// ```
+///
+/// Add custom key-value pairs:
+/// ```rust
+/// #[params(custom(service = "order-processor", version = "1.0"))]
+/// fn process_order(order_id: u32) {
+///     info!("Processing order"); // Includes the custom fields
+/// }
+/// ```
+///
+/// Handle async ownership with clone_upfront:
+/// ```rust
+/// #[params(clone_upfront)]
+/// async fn process_order(order: Order) {
+///     info!("Starting order processing");
+///     
+///     tokio::spawn(async move {
+///         // Use order here...
+///         order.process().await;
+///     });
+///     
+///     info!("Order dispatched"); // Still works, fields were cloned
+/// }
+/// ```
+///
+/// # How It Works
+///
+/// The macro redefines tracing macros within the function body to automatically include
+/// the specified fields in every log call. With `clone_upfront`, it generates code to clone
+/// values at the beginning of the function to ensure they're available throughout execution,
+/// even if the original values are moved.
+///
+/// # Parameters
+///
+/// * `args` - The macro arguments as specified in the attribute
+/// * `input` - The function to transform
+///
+/// # Returns
+///
+/// A TokenStream representing the transformed function with enhanced logging
 #[proc_macro_attribute]
 pub fn params(args: TokenStream, input: TokenStream) -> TokenStream {
     let params_args: LogArgs = match syn::parse(args) {
@@ -301,7 +465,7 @@ pub fn params(args: TokenStream, input: TokenStream) -> TokenStream {
 
             quote! {
                 #tls_var.with(|cell| {
-                    *cell.borrow_mut() = Some(format!("{:?}", &#expr));
+                    *cell.borrow_mut() = Some(format!("{}", &#expr));
                 });
             }
         });
@@ -312,7 +476,7 @@ pub fn params(args: TokenStream, input: TokenStream) -> TokenStream {
 
             quote! {
                 #tls_var.with(|cell| {
-                    *cell.borrow_mut() = Some(format!("{:?}", &#value));
+                    *cell.borrow_mut() = Some(format!("{}", &#value));
                 });
             }
         });
@@ -389,12 +553,12 @@ pub fn params(args: TokenStream, input: TokenStream) -> TokenStream {
     } else {
         // Generate the field expressions for the tracing macros with inline cloning
         let field_exprs = field_exprs_vec.iter().map(|(expr_str, expr)| {
-            quote! { #expr_str = ?#expr.clone() }
+            quote! { #expr_str = #expr.clone() }
         });
 
         let custom_exprs = custom_exprs_vec.iter().map(|(key, value)| {
             let key_ident = syn::parse_str::<syn::Path>(key).unwrap();
-            quote! { #key_ident = ?#value.clone() }
+            quote! { #key_ident = #value.clone() }
         });
 
         let all_field_exprs: Vec<proc_macro2::TokenStream> =

@@ -15,12 +15,12 @@ struct Config {
 
 // Log all arguments
 #[params]
-fn my_handler_all(user: User, config: Config) {
+fn my_handler_all(_user: User, _config: Config) {
     info!("Handler invoked");
 }
 
 // Log specific arguments
-#[params(fields(user, config))]
+#[params(fields(user.id, config.debug))]
 fn my_handler_fields(user: User, config: Config) {
     info!("Fields filtered");
 }
