@@ -1,13 +1,13 @@
 use log_args::log_args;
 use tracing::{debug, error, info, warn};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct User {
     id: u32,
     name: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[allow(dead_code)]
 struct Config {
     debug: bool,
@@ -46,7 +46,7 @@ async fn send_email(user: User) {
 }
 
 fn main() {
-        tracing_subscriber::fmt()
+    tracing_subscriber::fmt()
         .with_max_level(tracing::Level::DEBUG)
         .init();
 
