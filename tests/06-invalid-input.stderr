@@ -1,5 +1,0 @@
-error: Unknown attribute, expected `fields` or `custom`
-  --> tests/06-invalid-input.rs:10:10
-   |
-10 | #[params(field(user.id))]
-   |          ^^^^^

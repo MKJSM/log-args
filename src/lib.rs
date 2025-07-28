@@ -1,614 +1,868 @@
-//! # log-args: Procedural Macro for Logging Function Arguments with Async Support
+//! # log_args
 //!
-//! This crate provides the `#[params]` attribute macro to automatically log function arguments using the `tracing` crate,
-//! with special support for handling ownership in asynchronous contexts.
+//! A production-ready procedural macro library for automatic function argument logging
+//! with structured tracing support, context propagation, and security-conscious design.
 //!
 //! ## Features
-//! - Log all function arguments automatically or select specific ones
-//! - Log nested fields of struct arguments (e.g., `user.id`)
-//! - Add custom key-value pairs to log output
-//! - Compatible with both synchronous and asynchronous functions
-//! - Special `clone_upfront` option for handling ownership in async move blocks and spawned tasks
-//! - No tracing spans or span-related features used - just simple structured logging
 //!
-//! ## Basic Usage
+//! - **Automatic Parameter Logging**: Log all or selected function parameters
+//! - **Selective Field Logging**: Choose specific fields to log for security and performance
+//! - **Custom Static Fields**: Add service metadata and static context to logs
+//! - **Span Context Propagation**: Automatically propagate context to child functions
+//! - **Function Name Logging**: Include function names with configurable casing styles
+//! - **Async Support**: Full compatibility with async/await and tokio
+//! - **Method Support**: Works with impl blocks and methods
+//! - **Security-First**: Designed to exclude sensitive data by default
 //!
+//! ## Quick Start
+//!
+//! Add to your `Cargo.toml`:
+//! ```toml
+//! [dependencies]
+//! log_args = "0.1"
+//! tracing = "0.1"
+//! ```
+//!
+//! Basic usage:
 //! ```rust
 //! use log_args::params;
 //! use tracing::info;
 //!
-//! #[derive(Debug)]
-//! struct User { id: u32, name: String }
-//!
-//! // Log all arguments
 //! #[params]
-//! fn process_user(user: User, count: usize) {
-//!     info!("Processing user data");
-//!     // Logs: INFO process_user: Processing user data user=User { id: 42, name: "Alice" } count=5
-//! }
-//!
-//! // Log only specific fields
-//! #[params(fields(user.id, count))]
-//! fn validate_user(user: User, count: usize) {
-//!     info!("Validating user");
-//!     // Logs: INFO validate_user: Validating user user.id=42 count=5
-//! }
-//!
-//! // Add custom values
-//! #[params(custom(service = "auth", version = "1.0"))]
-//! fn authenticate(user: User) {
-//!     info!("Authentication attempt");
-//!     // Logs: INFO authenticate: Authentication attempt user=User { id: 42, name: "Alice" } service="auth" version="1.0"
+//! fn authenticate_user(username: String, password: String) {
+//!     info!("User authentication attempt");
 //! }
 //! ```
 //!
-//! ## Advanced: Async Support with `clone_upfront`
+//! ## Security Best Practices
 //!
-//! When working with asynchronous code, especially when moving values into `async move` blocks or
-//! `tokio::spawn`, you might encounter ownership issues. The `clone_upfront` option addresses this
-//! by ensuring fields can be safely used throughout your async function:
-//!
+//! **Always use selective logging in production:**
 //! ```rust
-//! use log_args::params;
-//! use tracing::info;
+//! // Good - Only logs safe fields
+//! #[params(fields(user.id, operation_type))]
+//! fn secure_operation(user: User, password: String, operation_type: String) {
+//!     info!("Operation started");
+//! }
 //!
-//! #[derive(Debug, Clone)]
-//! struct Client { id: String, name: String }
-//!
-//! #[params(clone_upfront, fields(client.id, client.name))]
-//! async fn process_client(client: Client) {
-//!     info!("Starting client processing");
-//!     
-//!     // Move client into an async block
-//!     let task = tokio::spawn(async move {
-//!         // Use client here without ownership issues
-//!         // ...
-//!         client
-//!     });
-//!     
-//!     // Logs still work even though client was moved
-//!     // because values were cloned upfront
-//!     info!("Waiting for client processing to complete");
+//! // Bad - Logs everything including sensitive data
+//! #[params]
+//! fn insecure_operation(user: User, password: String) {
+//!     // This would log the password!
 //! }
 //! ```
 //!
-//! ## Macro Attributes
-//!
-//! - `fields(...)`: Log only the specified arguments or fields (e.g., `fields(user.id, count)`).
-//!   This is useful for reducing log verbosity or accessing nested fields of struct arguments.
-//!
-//! - `custom(...)`: Add custom key-value pairs to the log output (e.g., `custom(service = "auth")`).
-//!   This allows adding static context to your logs that isn't directly from function arguments.
-//!
-//! - `clone_upfront`: Clone fields upfront to avoid ownership issues in async contexts. This is particularly
-//!   useful when working with `async move` blocks or spawned tasks where the original variables are moved.
-//!
-//! ## How It Works
-//!
-//! The `#[params]` macro redefines the tracing macros (`info!`, `warn!`, `error!`, `debug!`, `trace!`)
-//! within the function body to automatically include the specified function arguments or fields in the
-//! log output. For `clone_upfront`, it generates code that safely handles ownership by cloning values
-//! as needed to ensure they're available throughout the function execution.
-//!
-//! When using with async functions, especially those containing `tokio::spawn` with `async move` blocks,
-//! be careful about ownership and lifetimes. There are three patterns for handling this:
-//!
-//! ### Pattern 1: Using with owned parameters (default behavior)
-//!
-//! ```rust
-//! #[params(fields(session.user_id, session.session_id))]
-//! async fn process_session(session: Session) {
-//!     info!("Processing session"); // Fields are cloned here
-//!     
-//!     // Do some processing
-//!     tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-//!     
-//!     info!("Session processing completed"); // Fields are cloned here too
-//! }
-//! ```
-//!
-//! ### Pattern 2: Using the `clone_upfront` option (for async functions)
-//!
-//! This pattern clones all fields at the beginning of the function, which helps with logging
-//! in async functions. Note that for `tokio::spawn` with `async move` blocks, you'll still need
-//! to clone the fields again before the async block:
-//!
-//! ```rust
-//! #[params(clone_upfront, fields(self.client_id, self.company_id))]
-//! async fn run(self, socket: WebSocket) {
-//!     info!("Starting connection"); // Uses cloned fields
-//!     
-//!     // Clone variables are created at the beginning of the function
-//!     // so they're available for all tracing macros in the main function body
-//!     
-//!     // For tokio::spawn, you need to clone again for the async block
-//!     let task_client_id = self.client_id.clone();
-//!     let task_company_id = self.company_id.clone();
-//!     
-//!     let task = tokio::spawn(async move {
-//!         // Use the task-specific clones inside the async block
-//!         info!(client_id = ?task_client_id, company_id = ?task_company_id, "Worker task started");
-//!     });
-//!     
-//!     info!("Connection handler completed"); // Uses the original cloned fields
-//! }
-//! ```
-//!
-//! ### Pattern 3: Manual logging with references and async blocks
-//!
-//! When you need more control, you can manually clone and log fields:
-//!
-//! ```rust
-//! async fn handle_connection(client_id: String, company_id: String) {
-//!     // Log manually at the beginning
-//!     info!(client_id = ?client_id, company_id = ?company_id, "Starting connection");
-//!
-//!     // Clone what we need for the async block
-//!     let task_client_id = client_id.clone();
-//!
-//!     // Spawn the async task with its own cloned data
-//!     let task = tokio::spawn(async move {
-//!         info!(client_id = ?task_client_id, "Worker task started");
-//!     });
-//!
-//!     // This log can still use the original client_id
-//!     info!(client_id = ?client_id, "Connection handler completed");
-//! }
-//! ```
-//!
-//! See the examples directory for more detailed usage patterns.
-//!
-//! ## Limitations
-//! - Only works with the `tracing` crate macros (`info!`, `debug!`, `warn!`, `error!`, `trace!`).
-//! - Does not support span creation or level selection via macro input.
-//! - All arguments must implement `Debug` for structured logging.
-//! - For async code with `tokio::spawn`, use the `clone_upfront` option to avoid ownership issues.
-//! - Generates warnings about unused macro definitions (these are expected and can be ignored).
-//!
-//! See the examples directory for more detailed usage patterns.
+//! See the [USAGE.md](https://github.com/MKJSM/log-args/blob/main/USAGE.md) for comprehensive documentation.
 
-extern crate proc_macro;
-
-/// A procedural macro for automatically logging function arguments with tracing.
 use proc_macro::TokenStream;
-use quote::{quote, ToTokens};
-use syn::{
-    parse::{Parse, ParseStream, Result},
-    punctuated::Punctuated,
-    Expr, ExprLit, ItemFn, Lit, Meta, MetaNameValue, Token,
-};
+use quote::quote;
+use syn::parse::{Parse, Parser};
+use syn::punctuated::Punctuated;
+use syn::{parenthesized, Expr, FnArg, Ident, MetaNameValue, Pat, Token};
 
-/// Represents the parsed arguments of the `#[params]` attribute macro.
+/// A procedural macro for automatic function argument logging with structured tracing.
 ///
-/// This struct holds the configuration for how function arguments should be logged:
-/// - Which specific fields to log (if any)
-/// - Any custom key-value pairs to include in logs
-/// - Whether to clone fields upfront for async safety
+/// **By default, `#[params]` enables span-based context propagation and function name logging.**
+/// This provides comprehensive observability with minimal configuration.
 ///
-/// When no fields are specified, all function arguments will be logged.
-struct LogArgs {
-    /// Expressions representing specific fields to log (e.g., `user.id`, `count`)
-    fields: Vec<Expr>,
-
-    /// Custom key-value pairs to include in logs (e.g., `service = "auth"`)
-    custom: Vec<MetaNameValue>,
-
-    /// Whether to clone fields upfront at the beginning of the function
-    /// This is useful for async functions with `tokio::spawn` or `async move` blocks
-    /// to avoid ownership issues
-    clone_upfront: bool,
-}
-
-impl Parse for LogArgs {
-    /// Parses the arguments of the `#[params]` attribute macro.
-    ///
-    /// This method handles three types of arguments:
-    /// - `fields(...)`: Expressions representing specific fields to log
-    /// - `custom(...)`: Custom key-value pairs to include in logs
-    /// - `clone_upfront`: A flag to enable upfront cloning for async safety
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// #[params] // No arguments - log all function parameters
-    /// #[params(fields(user.id, count))] // Log only specific fields
-    /// #[params(custom(service = "auth"))] // Add custom key-value pairs
-    /// #[params(clone_upfront)] // Clone fields upfront for async safety
-    /// #[params(fields(user.id), custom(service = "auth"), clone_upfront)] // Combined
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if invalid attribute syntax is used or if unknown attributes
-    /// are provided.
-    fn parse(input: ParseStream) -> Result<Self> {
-        let mut fields = Vec::new();
-        let mut custom = Vec::new();
-        let mut clone_upfront = false;
-
-        if input.is_empty() {
-            return Ok(LogArgs {
-                fields,
-                custom,
-                clone_upfront,
-            });
-        }
-
-        // Parse comma-separated attributes
-        let nested_metas = Punctuated::<Meta, Token![,]>::parse_terminated(input)?;
-
-        for meta in nested_metas {
-            match meta {
-                Meta::List(list) => {
-                    if list.path.is_ident("fields") {
-                        fields.extend(
-                            list.parse_args_with(Punctuated::<Expr, Token![,]>::parse_terminated)?,
-                        );
-                    } else if list.path.is_ident("custom") {
-                        custom.extend(list.parse_args_with(
-                            Punctuated::<MetaNameValue, Token![,]>::parse_terminated,
-                        )?);
-                    } else {
-                        return Err(syn::Error::new_spanned(
-                            list.path,
-                            "Unknown attribute, expected `fields` or `custom`",
-                        ));
-                    }
-                }
-                Meta::Path(path) => {
-                    if path.is_ident("clone_upfront") {
-                        clone_upfront = true;
-                    } else {
-                        return Err(syn::Error::new_spanned(
-                            path,
-                            "Unknown attribute, expected `clone_upfront`",
-                        ));
-                    }
-                }
-                Meta::NameValue(name_value) => {
-                    if name_value.path.is_ident("clone_upfront") {
-                        // Handle clone_upfront = true/false if needed
-                        if let Expr::Lit(ExprLit {
-                            lit: Lit::Bool(lit_bool),
-                            ..
-                        }) = &name_value.value
-                        {
-                            clone_upfront = lit_bool.value;
-                        } else {
-                            return Err(syn::Error::new_spanned(
-                                name_value.value,
-                                "Expected a boolean literal for `clone_upfront`",
-                            ));
-                        }
-                    } else {
-                        return Err(syn::Error::new_spanned(
-                            name_value.path,
-                            "Unknown attribute",
-                        ));
-                    }
-                }
-            }
-        }
-
-        Ok(LogArgs {
-            fields,
-            custom,
-            clone_upfront,
-        })
-    }
-}
-
-/// A procedural macro attribute for automatically logging function arguments.
+/// This macro provides multiple modes of operation for different use cases:
+/// - Basic parameter logging with span propagation (default)
+/// - Selective field logging for security
+/// - Custom static field injection
+/// - Function name logging with configurable casing
+/// - All parameters logging with `all` attribute
 ///
-/// This macro modifies functions to automatically log their arguments when tracing macros
-/// are called within the function body. It redefines the standard tracing macros
-/// (`info!`, `warn!`, `error!`, `debug!`, `trace!`) within the function scope to include
-/// the specified function arguments or fields in every log message.
+/// ## Basic Usage (Default: Span + Function Names)
 ///
-/// # Usage Options
-///
-/// - `#[params]` - Log all function arguments
-/// - `#[params(fields(arg1, arg2.field))]` - Log only specific arguments or fields
-/// - `#[params(custom(key = "value"))]` - Add custom key-value pairs to logs
-/// - `#[params(clone_upfront)]` - Clone fields upfront for async safety
-/// - Any combination of the above
-///
-/// # Examples
-///
-/// Basic usage - log all arguments:
 /// ```rust
+/// use log_args::params;
+/// use tracing::info;
+///
 /// #[params]
-/// fn process_order(order_id: u32, user: User) {
-///     info!("Processing order"); // Logs all arguments
+/// fn process_user(user_id: u64, username: String) {
+///     info!("Processing user data");
+///     // Child functions will inherit context automatically
+///     validate_user(user_id);
+/// }
+///
+/// #[params]
+/// fn validate_user(id: u64) {
+///     info!("Validating user"); // Inherits parent context
 /// }
 /// ```
 ///
-/// Log specific fields:
-/// ```rust
-/// #[params(fields(user.id, item_count))]
-/// fn process_order(order_id: u32, user: User, item_count: usize) {
-///     info!("Processing order"); // Logs only user.id and item_count
+/// **JSON Output (with function names enabled via Cargo feature):**
+/// ```json
+/// {
+///   "level": "INFO",
+///   "fields": {
+///     "message": "Processing user data",
+///     "function": "ProcessUser",
+///     "user_id": 12345,
+///     "username": "alice"
+///   }
 /// }
 /// ```
 ///
-/// Add custom key-value pairs:
+/// ## Selective Field Logging (Recommended for Production)
+///
+/// For security and performance, specify exactly which fields to log:
+///
 /// ```rust
-/// #[params(custom(service = "order-processor", version = "1.0"))]
-/// fn process_order(order_id: u32) {
-///     info!("Processing order"); // Includes the custom fields
+/// #[params(fields(user.id, operation_type))]
+/// fn secure_operation(
+///     user: User,
+///     password: String,      // Not logged - sensitive
+///     operation_type: String, // Logged - safe
+/// ) {
+///     info!("Secure operation started");
 /// }
 /// ```
 ///
-/// Handle async ownership with clone_upfront:
+/// ## Custom Static Fields
+///
+/// Add service metadata and static context:
+///
 /// ```rust
-/// #[params(clone_upfront)]
-/// async fn process_order(order: Order) {
-///     info!("Starting order processing");
+/// #[params(
+///     fields(user_id),
+///     custom(
+///         service = "user-management",
+///         version = "2.1.0",
+///         environment = "production"
+///     )
+/// )]
+/// fn service_operation(user_id: u64, sensitive_data: String) {
+///     info!("Service operation");
+/// }
+/// ```
+///
+/// ## All Parameters Logging
+///
+/// Use the `all` attribute to explicitly log all function parameters:
+///
+/// ```rust
+/// #[params(all)]
+/// fn debug_function(user_id: u64, data: String, config: Config) {
+///     info!("Debug information");
+/// }
+/// ```
+///
+/// This is useful for debugging or when you want to ensure all parameters are logged
+/// regardless of other attributes.
+///
+/// ## Span Context Propagation (Enabled by Default)
+///
+/// **Note: Span propagation is now enabled by default with `#[params]`.**
+/// Context automatically propagates to child functions:
+///
+/// ```rust
+/// use log_args_runtime::{info as ctx_info};
+///
+/// #[params(fields(user.id, transaction.amount))]
+/// fn process_payment(user: User, transaction: Transaction, card_data: CardData) {
+///     info!("Starting payment processing");
 ///     
-///     tokio::spawn(async move {
-///         // Use order here...
-///         order.process().await;
-///     });
-///     
-///     info!("Order dispatched"); // Still works, fields were cloned
+///     validate_payment();  // Inherits context automatically
+///     charge_card();       // Inherits context automatically
+/// }
+///
+/// #[params]
+/// fn validate_payment() {
+///     info!("Validating payment");  // Includes parent context
 /// }
 /// ```
 ///
-/// # How It Works
+/// ## Function Name Logging
 ///
-/// The macro redefines tracing macros within the function body to automatically include
-/// the specified fields in every log call. With `clone_upfront`, it generates code to clone
-/// values at the beginning of the function to ensure they're available throughout execution,
-/// even if the original values are moved.
+/// Enable function name logging with Cargo features:
 ///
-/// # Parameters
+/// ```toml
+/// [dependencies]
+/// log_args = { version = "0.1", features = ["function-names-pascal"] }
+/// ```
 ///
-/// * `args` - The macro arguments as specified in the attribute
-/// * `input` - The function to transform
+/// Available casing styles:
+/// - `function-names-snake` → `process_payment`
+/// - `function-names-camel` → `processPayment`
+/// - `function-names-pascal` → `ProcessPayment` (recommended)
+/// - `function-names-screaming` → `PROCESS_PAYMENT`
+/// - `function-names-kebab` → `process-payment`
 ///
-/// # Returns
+/// ## Async Support
 ///
-/// A TokenStream representing the transformed function with enhanced logging
+/// Works seamlessly with async functions:
+///
+/// ```rust
+/// #[params(span, fields(user_id, operation_type))]
+/// async fn async_operation(user_id: u64, operation_type: String, secret: String) {
+///     info!("Starting async operation");
+///     
+///     tokio::time::sleep(Duration::from_millis(100)).await;
+///     
+///     info!("Async operation completed");
+/// }
+/// ```
+///
+/// ## Method Support
+///
+/// Works with methods in impl blocks:
+///
+/// ```rust
+/// impl UserService {
+///     #[params(span, fields(user.id, self.config.timeout))]
+///     fn process_user(&self, user: User, sensitive_token: String) {
+///         info!("Processing user in service");
+///     }
+/// }
+/// ```
+///
+/// ## Security Considerations
+///
+/// **⚠️ Important:** Always use selective logging in production to avoid logging sensitive data:
+///
+/// - Passwords, tokens, API keys
+/// - Personal Identifiable Information (PII)
+/// - Credit card numbers, financial data
+/// - Internal system keys and secrets
+///
+/// ## Error Handling
+///
+/// The macro works with Result types and error handling patterns:
+///
+/// ```rust
+/// #[params(fields(operation_id, retry_count))]
+/// fn fallible_operation(
+///     operation_id: String,
+///     retry_count: u32,
+///     secret_key: String,  // Not logged
+/// ) -> Result<String, ProcessingError> {
+///     info!("Starting fallible operation");
+///     
+///     // Operation logic that might fail
+///     Ok("success".to_string())
+/// }
+/// ```
+///
+/// ## Performance Notes
+///
+/// - Selective logging (`fields(...)`) is more efficient than logging all parameters
+/// - Complex field expressions are evaluated at runtime - use judiciously in hot paths
+/// - Span creation has overhead - use for important operations that benefit from context
+///
+/// For comprehensive documentation and examples, see:
+/// - [USAGE.md](https://github.com/MKJSM/log-args/blob/main/USAGE.md)
+/// - [Examples](https://github.com/MKJSM/log-args/tree/main/examples)
+/// - [Integration Tests](https://github.com/MKJSM/log-args/tree/main/tests)
+///
+/// fn child_function() {
+///     info!("Child task");
+/// }
+///
 #[proc_macro_attribute]
 pub fn params(args: TokenStream, input: TokenStream) -> TokenStream {
-    let params_args: LogArgs = match syn::parse(args) {
-        Ok(params) => params,
-        Err(e) => return e.to_compile_error().into(),
-    };
-
-    let mut func: ItemFn = match syn::parse(input) {
-        Ok(func) => func,
-        Err(e) => return e.to_compile_error().into(),
-    };
-
-    // If no fields are provided, do nothing.
-    if params_args.fields.is_empty() && params_args.custom.is_empty() {
-        return func.into_token_stream().into();
-    }
-
-    // Create the field expressions for the log macros that clone inline
-    // We'll store the original expressions to use in the macro redefinitions
-    let mut field_exprs_vec = Vec::new();
-    for expr in &params_args.fields {
-        let expr_str = expr.to_token_stream().to_string().replace(' ', "");
-        field_exprs_vec.push((expr_str, expr.clone()));
-    }
-
-    let mut custom_exprs_vec = Vec::new();
-    for nv in &params_args.custom {
-        let key = nv.path.to_token_stream().to_string();
-        custom_exprs_vec.push((key, nv.value.clone()));
-    }
-
-    // Get the original function body
-    let original_body = func.block;
-
-    // Handle differently based on whether we're cloning upfront or inline
-    if params_args.clone_upfront {
-        // In the clone_upfront mode, we'll use thread-local storage to keep cloned values
-        // that can be safely accessed even if the original values are moved
-
-        // First, create a unique identifier for this function
-        let fn_name = format!("{}", func.sig.ident);
-        let fn_id = syn::Ident::new(&fn_name, proc_macro2::Span::call_site());
-
-        // Create field names for thread_local storage
-        let tls_var_names = field_exprs_vec
-            .iter()
-            .map(|(expr_str, _)| {
-                let safe_name = expr_str.replace('.', "_");
-                let tls_name = format!("__LOG_ARGS_TLS_{fn_id}_{safe_name}");
-                (
-                    expr_str.clone(),
-                    syn::Ident::new(&tls_name, proc_macro2::Span::call_site()),
-                )
-            })
-            .collect::<Vec<_>>();
-
-        let custom_tls_var_names = custom_exprs_vec
-            .iter()
-            .map(|(key, _)| {
-                let tls_name = format!("__LOG_ARGS_TLS_{fn_id}_{key}");
-                (
-                    key.clone(),
-                    syn::Ident::new(&tls_name, proc_macro2::Span::call_site()),
-                )
-            })
-            .collect::<Vec<_>>();
-
-        // Generate thread_local declarations
-        let thread_locals = tls_var_names.iter().map(|(_expr_str, tls_var)| {
-            quote! {
-                thread_local! {
-                    static #tls_var: ::std::cell::RefCell<Option<String>> =
-                        ::std::cell::RefCell::new(None);
-                }
-            }
-        });
-
-        let custom_thread_locals = custom_tls_var_names.iter().map(|(_key, tls_var)| {
-            quote! {
-                thread_local! {
-                    static #tls_var: ::std::cell::RefCell<Option<String>> =
-                        ::std::cell::RefCell::new(None);
-                }
-            }
-        });
-
-        // Generate thread_local initializations
-        let tls_inits = tls_var_names.iter().map(|(expr_str, tls_var)| {
-            let expr_index = field_exprs_vec
-                .iter()
-                .position(|(s, _)| s == expr_str)
-                .unwrap();
-            let (_, expr) = &field_exprs_vec[expr_index];
-
-            quote! {
-                #tls_var.with(|cell| {
-                    *cell.borrow_mut() = Some(format!("{}", &#expr));
-                });
-            }
-        });
-
-        let custom_tls_inits = custom_tls_var_names.iter().map(|(key, tls_var)| {
-            let custom_index = custom_exprs_vec.iter().position(|(k, _)| k == key).unwrap();
-            let (_, value) = &custom_exprs_vec[custom_index];
-
-            quote! {
-                #tls_var.with(|cell| {
-                    *cell.borrow_mut() = Some(format!("{}", &#value));
-                });
-            }
-        });
-
-        // Generate field expressions for tracing macros that reference thread_locals
-        let field_exprs = tls_var_names.iter().map(|(expr_str, tls_var)| {
-            let key_parts: Vec<&str> = expr_str.split('.').collect();
-            let key = key_parts.last().copied().unwrap_or(expr_str.as_str());
-
-            quote! { #key = #tls_var.with(|cell| cell.borrow().clone().unwrap_or_default()) }
-        });
-
-        let custom_exprs = custom_tls_var_names.iter().map(|(key, tls_var)| {
-            let key_ident = syn::parse_str::<syn::Path>(key).unwrap();
-
-            quote! { #key_ident = #tls_var.with(|cell| cell.borrow().clone().unwrap_or_default()) }
-        });
-
-        // Collect all field expressions
-        let all_field_exprs: Vec<proc_macro2::TokenStream> =
-            field_exprs.chain(custom_exprs).collect();
-        let field_exprs_tokens = quote! { #(#all_field_exprs),* };
-
-        // Create a new function body with thread_locals and macro redefinitions
-        let new_body = quote! {
-            {
-                // Suppress unused macro warnings since not all redefined macros might be used
-                #[allow(unused_macros)]
-                // Define thread_local storage for each field and custom value
-                #(#thread_locals)*
-                #(#custom_thread_locals)*
-
-                // Initialize thread_locals with current values
-                #(#tls_inits)*
-                #(#custom_tls_inits)*
-
-                // Redefine tracing macros to use thread_local values
-                #[allow(unused_macros)]
-                macro_rules! info {
-                    () => { tracing::info!(#field_exprs_tokens); };
-                    ($($arg:tt)+) => { tracing::info!(#field_exprs_tokens, $($arg)*); };
-                }
-
-                #[allow(unused_macros)]
-                macro_rules! warn {
-                    () => { tracing::warn!(#field_exprs_tokens); };
-                    ($($arg:tt)+) => { tracing::warn!(#field_exprs_tokens, $($arg)*); };
-                }
-
-                #[allow(unused_macros)]
-                macro_rules! error {
-                    () => { tracing::error!(#field_exprs_tokens); };
-                    ($($arg:tt)+) => { tracing::error!(#field_exprs_tokens, $($arg)*); };
-                }
-
-                #[allow(unused_macros)]
-                macro_rules! debug {
-                    () => { tracing::debug!(#field_exprs_tokens); };
-                    ($($arg:tt)+) => { tracing::debug!(#field_exprs_tokens, $($arg)*); };
-                }
-
-                #[allow(unused_macros)]
-                macro_rules! trace {
-                    () => { tracing::trace!(#field_exprs_tokens); };
-                    ($($arg:tt)+) => { tracing::trace!(#field_exprs_tokens, $($arg)*); };
-                }
-
-                #original_body
-            }
-        };
-
-        // Replace the function body
-        func.block = syn::parse2(new_body).expect("Failed to parse new function body");
+    let mut item = if let Ok(item_fn) = syn::parse::<syn::ItemFn>(input.clone()) {
+        FnItem::Item(item_fn)
+    } else if let Ok(impl_item_fn) = syn::parse::<syn::ImplItemFn>(input.clone()) {
+        FnItem::ImplItem(impl_item_fn)
     } else {
-        // Generate the field expressions for the tracing macros with inline cloning
-        let field_exprs = field_exprs_vec.iter().map(|(expr_str, expr)| {
-            quote! { #expr_str = #expr.clone() }
-        });
+        return syn::Error::new_spanned(
+            proc_macro2::TokenStream::from(input),
+            "The #[params] attribute can only be applied to functions or methods.",
+        )
+        .to_compile_error()
+        .into();
+    };
 
-        let custom_exprs = custom_exprs_vec.iter().map(|(key, value)| {
-            let key_ident = syn::parse_str::<syn::Path>(key).unwrap();
-            quote! { #key_ident = #value.clone() }
-        });
+    let allow_unused_macros_attr: syn::Attribute = syn::parse_quote! { #[allow(unused_macros)] };
+    item.attrs_mut().push(allow_unused_macros_attr);
 
-        let all_field_exprs: Vec<proc_macro2::TokenStream> =
-            field_exprs.chain(custom_exprs).collect();
-        let field_exprs_tokens = quote! { #(#all_field_exprs),* };
+    let attrs = match Punctuated::<Attribute, Token![,]>::parse_terminated.parse(args) {
+        Ok(attrs) => attrs,
+        Err(e) => return e.to_compile_error().into(),
+    };
 
-        // Create a new function body that redefines the tracing macros with inline cloning
-        let new_body = quote! {
-            {
-                // Suppress unused macro warnings since not all redefined macros might be used
-                #[allow(unused_macros)]
-                // Redefine tracing macros to include our fields with inline cloning
-                #[allow(unused_macros)]
-                macro_rules! info {
-                    () => { tracing::info!(#field_exprs_tokens) };
-                    ($($arg:tt)+) => { tracing::info!(#field_exprs_tokens, $($arg)*) };
-                }
-                #[allow(unused_macros)]
-                macro_rules! warn {
-                    () => { tracing::warn!(#field_exprs_tokens) };
-                    ($($arg:tt)+) => { tracing::warn!(#field_exprs_tokens, $($arg)*) };
-                }
-                #[allow(unused_macros)]
-                macro_rules! error {
-                    () => { tracing::error!(#field_exprs_tokens) };
-                    ($($arg:tt)+) => { tracing::error!(#field_exprs_tokens, $($arg)*) };
-                }
-                #[allow(unused_macros)]
-                macro_rules! debug {
-                    () => { tracing::debug!(#field_exprs_tokens) };
-                    ($($arg:tt)+) => { tracing::debug!(#field_exprs_tokens, $($arg)*) };
-                }
-                #[allow(unused_macros)]
-                macro_rules! trace {
-                    () => { tracing::trace!(#field_exprs_tokens) };
-                    ($($arg:tt)+) => { tracing::trace!(#field_exprs_tokens, $($arg)*) };
-                }
+    let config = AttrConfig::from_attributes(attrs);
+    let context_fields = get_context_fields_quote(&item, &config);
 
-                // Original function body
-                #original_body
-            }
-        };
+    if config.span {
+        // Generate context map for span propagation
+        let context_map = get_context_map_for_span(&item, &config);
 
-        // Replace the function body
-        func.block = syn::parse2(new_body).expect("Failed to parse new function body");
+        if item.sig().asyncness.is_some() {
+            let log_redefines = get_log_redefines_with_fields(&context_fields, true);
+            let original_block = item.block();
+            let new_block = quote! {
+                {
+                    let _context_guard = ::log_args_runtime::push_async_context(#context_map);
+                    #log_redefines
+                    #original_block
+                }
+            };
+            *item.block_mut() = syn::parse2(new_block).expect("Failed to parse new async block");
+        } else {
+            let log_redefines = get_log_redefines_with_fields(&context_fields, false);
+            let original_block = item.block();
+            let new_block = quote! {
+                {
+                    let _context_guard = ::log_args_runtime::push_context(#context_map);
+                    #log_redefines
+                    #original_block
+                }
+            };
+            *item.block_mut() = syn::parse2(new_block).expect("Failed to parse new sync block");
+        }
+    } else {
+        // No span, use direct field injection
+        if item.sig().asyncness.is_some() {
+            let log_redefines = get_log_redefines_with_fields(&context_fields, true);
+            let original_block = item.block();
+            let new_block = quote! {
+                {
+                    #log_redefines
+                    #original_block
+                }
+            };
+            *item.block_mut() = syn::parse2(new_block).expect("Failed to parse new async block");
+        } else {
+            let log_redefines = get_log_redefines_with_fields(&context_fields, false);
+            let original_block = item.block();
+            let new_block = quote! {
+                {
+                    #log_redefines
+                    #original_block
+                }
+            };
+            *item.block_mut() = syn::parse2(new_block).expect("Failed to parse new sync block");
+        }
     }
 
-    // Add an attribute to suppress warnings about unused variables
-    let allow_unused_attr: syn::Attribute = syn::parse_quote! { #[allow(unused_variables)] };
-    func.attrs.push(allow_unused_attr);
+    TokenStream::from(quote! { #item })
+}
 
-    func.into_token_stream().into()
+enum Attribute {
+    Fields(Punctuated<Expr, Token![,]>),
+    Custom(Punctuated<MetaNameValue, Token![,]>),
+    Current(Punctuated<Expr, Token![,]>),
+    CloneUpfront,
+    Span,
+    All,
+    AutoCapture,  // New attribute for automatic closure context capture
+}
+
+impl Parse for Attribute {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let ident: Ident = input.parse()?;
+        if ident == "fields" {
+            let content;
+            parenthesized!(content in input);
+            let fields = Punctuated::<Expr, Token![,]>::parse_terminated(&content)?;
+            Ok(Attribute::Fields(fields))
+        } else if ident == "custom" {
+            let content;
+            parenthesized!(content in input);
+            let custom = Punctuated::<MetaNameValue, Token![,]>::parse_terminated(&content)?;
+            Ok(Attribute::Custom(custom))
+        } else if ident == "current" {
+            let content;
+            parenthesized!(content in input);
+            let current = Punctuated::<Expr, Token![,]>::parse_terminated(&content)?;
+            Ok(Attribute::Current(current))
+        } else if ident == "clone_upfront" {
+            Ok(Attribute::CloneUpfront)
+        } else if ident == "span" {
+            Ok(Attribute::Span)
+        } else if ident == "all" {
+            Ok(Attribute::All)
+        } else if ident == "auto_capture" {
+            Ok(Attribute::AutoCapture)
+        } else {
+            Err(syn::Error::new_spanned(ident, "unknown attribute"))
+        }
+    }
+}
+
+struct AttrConfig {
+    fields: Vec<syn::Expr>,
+    custom: Vec<syn::MetaNameValue>,
+    current: Vec<syn::Expr>,
+    clone_upfront: bool,
+    span: bool,
+    all_params: bool,
+    auto_capture: bool,  // New field for automatic closure context capture
+}
+
+impl Default for AttrConfig {
+    fn default() -> Self {
+        Self {
+            fields: Vec::new(),
+            custom: Vec::new(),
+            current: Vec::new(),
+            clone_upfront: true, // Default to true for safety
+            span: true,          // Default to true for context propagation
+            all_params: false,
+            auto_capture: false, // Default to false for auto_capture
+        }
+    }
+}
+
+impl AttrConfig {
+    fn from_attributes(attrs: Punctuated<Attribute, Token![,]>) -> Self {
+        let mut config = AttrConfig::default();
+        for attr in attrs {
+            match attr {
+                Attribute::Fields(fields) => config.fields.extend(fields),
+                Attribute::Custom(custom) => config.custom.extend(custom),
+                Attribute::Current(current) => config.current.extend(current),
+                Attribute::CloneUpfront => config.clone_upfront = true,
+                Attribute::Span => {
+                    config.span = true;
+                    config.clone_upfront = true; // Span implies clone_upfront for safety
+                }
+                Attribute::All => {
+                    config.all_params = true;
+                }
+                Attribute::AutoCapture => {
+                    config.auto_capture = true;
+                }
+            }
+        }
+        config
+    }
+}
+
+fn get_context_fields_quote(item: &FnItem, config: &AttrConfig) -> Vec<proc_macro2::TokenStream> {
+    let mut field_assignments = vec![];
+
+    // Determine what to log based on configuration
+    let _has_selective_attributes =
+        !config.fields.is_empty() || !config.custom.is_empty() || !config.current.is_empty();
+
+    // For span propagation, automatically inherit parent context fields
+    // This ensures automatic context propagation without manual attributes
+    if config.span && config.fields.is_empty() && config.custom.is_empty() && config.current.is_empty() && !config.all_params {
+        // When only span is enabled (default behavior), inherit all parent context fields
+        // This uses the runtime macro to dynamically include inherited fields
+        field_assignments.push(quote! {
+            context = ::log_args_runtime::get_inherited_context_string()
+        });
+    }
+
+    if config.all_params {
+        // Log all parameters only when 'all' is explicitly specified
+        let all_args = get_all_args(item);
+        for ident in all_args {
+            let ident_str = ident.to_string();
+            // When span is enabled, use span context lookup for post-move safety
+            if config.span {
+                field_assignments.push(quote! { 
+                    #ident = ::log_args_runtime::get_context_value(&#ident_str).unwrap_or_else(|| "<missing>".to_string())
+                });
+            } else {
+                field_assignments.push(quote! { #ident = ?#ident });
+            }
+        }
+    }
+
+    if !config.fields.is_empty() {
+        // Log only specified fields
+        for field_expr in &config.fields {
+            // Convert complex expressions to string field names
+            let field_name = quote! { #field_expr }.to_string();
+            let field_key = field_name.replace(' ', "");
+            
+            // If clone_upfront is enabled and expression contains self.field, handle it specially
+            if config.clone_upfront {
+                let expr_str = quote!(#field_expr).to_string();
+                if expr_str.contains("self.") {
+                    // When span is enabled, use span context lookup for post-move safety
+                    if config.span {
+                        field_assignments.push(quote! { 
+                            #field_name = ::log_args_runtime::get_context_value(&#field_key).unwrap_or_else(|| "<missing>".to_string())
+                        });
+                    } else {
+                        // No span, use cloned variable approach (similar to custom fields)
+                        let mut modified_expr_str = expr_str.clone();
+                        let mut start = 0;
+                        while let Some(pos) = modified_expr_str[start..].find("self.") {
+                            let field_start = start + pos + 5; // Skip "self."
+                            let remaining = &modified_expr_str[field_start..];
+                            
+                            // Find the end of the field name
+                            let field_end = remaining
+                                .find(|c: char| !c.is_alphanumeric() && c != '_')
+                                .unwrap_or(remaining.len());
+                            
+                            let field_name_part = &remaining[..field_end];
+                            let replacement = format!("__{}_for_macro", field_name_part);
+                            
+                            // Replace self.field_name with __field_name_for_macro
+                            let old_expr = format!("self.{}", field_name_part);
+                            modified_expr_str = modified_expr_str.replace(&old_expr, &replacement);
+                            
+                            start = field_start + field_end;
+                        }
+                        
+                        // Parse the modified string back to a token stream
+                        let modified_expr: proc_macro2::TokenStream = modified_expr_str.parse().unwrap_or_else(|_| quote!(#field_expr));
+                        field_assignments.push(quote! { #field_name = ?#modified_expr });
+                    }
+                } else {
+                    field_assignments.push(quote! { #field_name = ?#field_expr });
+                }
+            } else {
+                field_assignments.push(quote! { #field_name = ?#field_expr });
+            }
+        }
+    }
+    // Default behavior: Only enable span propagation and function name logging
+    // No automatic parameter logging unless explicitly requested
+    // If only custom/current are specified (no fields), we don't log any parameters
+
+    // Add custom fields (always included)
+    for nv in &config.custom {
+        let key = &nv.path;
+        let value = &nv.value;
+        
+        // Add to logging fields
+        field_assignments.push(quote! {
+            #key = #value
+        });
+    }
+
+    // Add current fields (only logged in current function, not propagated)
+    for current_field in &config.current {
+        let field_name = quote! { #current_field }.to_string();
+        let field_key = field_name.replace(' ', "");
+        
+        // If clone_upfront is enabled and expression contains self.field, handle it specially
+        if config.clone_upfront {
+            let expr_str = quote!(#current_field).to_string();
+            if expr_str.contains("self.") {
+                // When span is enabled, use span context lookup for post-move safety
+                if config.span {
+                    field_assignments.push(quote! { 
+                        #field_name = ::log_args_runtime::get_context_value(&#field_key).unwrap_or_else(|| "<missing>".to_string())
+                    });
+                } else {
+                    // No span, use cloned variable approach (similar to custom fields)
+                    let mut modified_expr_str = expr_str.clone();
+                    let mut start = 0;
+                    while let Some(pos) = modified_expr_str[start..].find("self.") {
+                        let field_start = start + pos + 5; // Skip "self."
+                        let remaining = &modified_expr_str[field_start..];
+                        
+                        // Find the end of the field name
+                        let field_end = remaining
+                            .find(|c: char| !c.is_alphanumeric() && c != '_')
+                            .unwrap_or(remaining.len());
+                        
+                        let field_name_part = &remaining[..field_end];
+                        let replacement = format!("__{}_for_macro", field_name_part);
+                        
+                        // Replace self.field_name with __field_name_for_macro
+                        let old_expr = format!("self.{}", field_name_part);
+                        modified_expr_str = modified_expr_str.replace(&old_expr, &replacement);
+                        
+                        start = field_start + field_end;
+                    }
+                    
+                    // Parse the modified string back to a token stream
+                    let modified_expr: proc_macro2::TokenStream = modified_expr_str.parse().unwrap_or_else(|_| quote!(#current_field));
+                    field_assignments.push(quote! { #field_name = ?#modified_expr });
+                }
+            } else {
+                field_assignments.push(quote! { #field_name = ?#current_field });
+            }
+        } else {
+            field_assignments.push(quote! { #field_name = ?#current_field });
+        }
+    }
+
+    // Add function name if any function-names feature is enabled
+    #[cfg(any(
+        feature = "function-names-snake",
+        feature = "function-names-camel",
+        feature = "function-names-pascal",
+        feature = "function-names-screaming",
+        feature = "function-names-kebab"
+    ))]
+    {
+        let function_name = get_function_name(item);
+        field_assignments.push(quote! { "function" = #function_name });
+    }
+
+    field_assignments
+}
+
+#[cfg(any(
+    feature = "function-names-snake",
+    feature = "function-names-camel",
+    feature = "function-names-pascal",
+    feature = "function-names-screaming",
+    feature = "function-names-kebab"
+))]
+fn get_function_name(item: &FnItem) -> String {
+    let function_name = match item {
+        FnItem::Item(item_fn) => item_fn.sig.ident.to_string(),
+        FnItem::ImplItem(impl_item_fn) => impl_item_fn.sig.ident.to_string(),
+    };
+
+    // Apply the appropriate casing based on enabled features
+    #[cfg(feature = "function-names-snake")]
+    return function_name; // Keep original snake_case
+
+    #[cfg(feature = "function-names-camel")]
+    return to_camel_case(&function_name);
+
+    #[cfg(feature = "function-names-pascal")]
+    return to_pascal_case(&function_name);
+
+    #[cfg(feature = "function-names-screaming")]
+    return to_screaming_snake_case(&function_name);
+
+    #[cfg(feature = "function-names-kebab")]
+    return to_kebab_case(&function_name);
+
+    // Default fallback when no function name features are enabled
+    #[cfg(not(any(
+        feature = "function-names-snake",
+        feature = "function-names-camel",
+        feature = "function-names-pascal",
+        feature = "function-names-screaming",
+        feature = "function-names-kebab"
+    )))]
+    to_pascal_case(&function_name)
+}
+
+// Convert snake_case to camelCase (first letter lowercase)
+#[cfg(feature = "function-names-camel")]
+fn to_camel_case(snake_case: &str) -> String {
+    let words: Vec<&str> = snake_case.split('_').collect();
+    if words.is_empty() {
+        return String::new();
+    }
+
+    let mut result = words[0].to_lowercase();
+    for word in &words[1..] {
+        if !word.is_empty() {
+            let mut chars = word.chars();
+            if let Some(first) = chars.next() {
+                result.push_str(&first.to_uppercase().collect::<String>());
+                result.push_str(&chars.as_str().to_lowercase());
+            }
+        }
+    }
+    result
+}
+
+// Convert snake_case to PascalCase (first letter uppercase)
+#[allow(dead_code)]
+#[cfg(any(
+    feature = "function-names-pascal",
+    not(any(
+        feature = "function-names-snake",
+        feature = "function-names-camel",
+        feature = "function-names-screaming",
+        feature = "function-names-kebab"
+    ))
+))]
+fn to_pascal_case(snake_case: &str) -> String {
+    snake_case
+        .split('_')
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(first) => {
+                    first.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase()
+                }
+            }
+        })
+        .collect()
+}
+
+// Convert snake_case to SCREAMING_SNAKE_CASE
+#[cfg(feature = "function-names-screaming")]
+fn to_screaming_snake_case(snake_case: &str) -> String {
+    snake_case.to_uppercase()
+}
+
+// Convert snake_case to kebab-case
+#[cfg(feature = "function-names-kebab")]
+fn to_kebab_case(snake_case: &str) -> String {
+    snake_case.replace('_', "-")
+}
+
+fn get_context_map_for_span(_item: &FnItem, config: &AttrConfig) -> proc_macro2::TokenStream {
+    let mut fields_to_log = vec![];
+
+    // Store all field types in span context for dynamic lookup
+    // This ensures that span context lookup works for ALL field types
+    
+    // 1. Add all parameters if requested
+    if config.all_params {
+        let all_args = get_all_args(_item);
+        for ident in all_args {
+            let ident_str = ident.to_string();
+            fields_to_log.push(quote! {
+                new_context.insert(#ident_str.to_string(), format!("{:?}", #ident));
+            });
+        }
+    }
+    
+    // 2. Add explicitly specified fields
+    if !config.fields.is_empty() {
+        for field_expr in &config.fields {
+            let key_str = quote!(#field_expr).to_string().replace(' ', "");
+            fields_to_log.push(quote! {
+                new_context.insert(#key_str.to_string(), format!("{:?}", &#field_expr));
+            });
+        }
+    }
+    
+    // 3. Add custom fields (always included)
+    for nv in &config.custom {
+        let key = &nv.path;
+        let value = &nv.value;
+        let key_str = quote!(#key).to_string().replace(' ', "");
+        
+        // For span context, use the original expression directly
+        // This will be evaluated before any moves happen
+        fields_to_log.push(quote! {
+            new_context.insert(#key_str.to_string(), format!("{}", #value));
+        });
+        
+        // Also store globally for cross-boundary persistence
+        fields_to_log.push(quote! {
+            ::log_args_runtime::set_global_context(&#key_str, &format!("{}", #value));
+        });
+    }
+    
+    // 4. Add current fields (these are also stored in context for consistency)
+    for current_field in &config.current {
+        let field_name = quote! { #current_field }.to_string();
+        let field_key = field_name.replace(' ', "");
+        fields_to_log.push(quote! {
+            new_context.insert(#field_key.to_string(), format!("{:?}", #current_field));
+        });
+    }
+
+    // Add function name to context if any function-names feature is enabled (always propagated)
+    #[cfg(any(
+        feature = "function-names-snake",
+        feature = "function-names-camel",
+        feature = "function-names-pascal",
+        feature = "function-names-screaming",
+        feature = "function-names-kebab"
+    ))]
+    {
+        let function_name = get_function_name(_item);
+        fields_to_log.push(quote! {
+            new_context.insert("function".to_string(), #function_name.to_string());
+        });
+    }
+
+    quote! {
+        {
+            let mut new_context = ::std::collections::HashMap::new();
+            #(#fields_to_log)*
+            new_context
+        }
+    }
+}
+
+fn get_all_args(item: &FnItem) -> Vec<Ident> {
+    item.sig()
+        .inputs
+        .iter()
+        .filter_map(|arg| {
+            if let FnArg::Typed(pt) = arg {
+                if let Pat::Ident(pi) = &*pt.pat {
+                    if pi.ident != "self" {
+                        return Some(pi.ident.clone());
+                    }
+                }
+            }
+            None
+        })
+        .collect()
+}
+
+enum FnItem {
+    Item(syn::ItemFn),
+    ImplItem(syn::ImplItemFn),
+}
+
+impl quote::ToTokens for FnItem {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        match self {
+            FnItem::Item(i) => i.to_tokens(tokens),
+            FnItem::ImplItem(i) => i.to_tokens(tokens),
+        }
+    }
+}
+
+impl FnItem {
+    fn attrs_mut(&mut self) -> &mut Vec<syn::Attribute> {
+        match self {
+            FnItem::Item(item_fn) => &mut item_fn.attrs,
+            FnItem::ImplItem(impl_item_fn) => &mut impl_item_fn.attrs,
+        }
+    }
+
+    fn sig(&self) -> &syn::Signature {
+        match self {
+            FnItem::Item(i) => &i.sig,
+            FnItem::ImplItem(i) => &i.sig,
+        }
+    }
+
+    fn block(&self) -> &syn::Block {
+        match self {
+            FnItem::Item(i) => &i.block,
+            FnItem::ImplItem(i) => &i.block,
+        }
+    }
+
+    fn block_mut(&mut self) -> &mut syn::Block {
+        match self {
+            FnItem::Item(i) => &mut i.block,
+            FnItem::ImplItem(i) => &mut i.block,
+        }
+    }
+}
+
+fn get_log_redefines_with_fields(
+    context_fields: &[proc_macro2::TokenStream],
+    _is_async: bool,
+) -> proc_macro2::TokenStream {
+    // Always redefine macros to include both local fields and inherited context
+    // The context inheritance will be handled by including context fields from the runtime
+    quote! {
+        macro_rules! info {
+            ($($t:tt)*) => {
+                ::log_args_runtime::log_with_context!(::tracing::info, ::log_args_runtime::get_context(), #(#context_fields,)* $($t)*);
+            };
+        }
+        macro_rules! warn {
+            ($($t:tt)*) => {
+                ::log_args_runtime::log_with_context!(::tracing::warn, ::log_args_runtime::get_context(), #(#context_fields,)* $($t)*);
+            };
+        }
+        macro_rules! error {
+            ($($t:tt)*) => {
+                ::log_args_runtime::log_with_context!(::tracing::error, ::log_args_runtime::get_context(), #(#context_fields,)* $($t)*);
+            };
+        }
+        macro_rules! debug {
+            ($($t:tt)*) => {
+                ::log_args_runtime::log_with_context!(::tracing::debug, ::log_args_runtime::get_context(), #(#context_fields,)* $($t)*);
+            };
+        }
+        macro_rules! trace {
+            ($($t:tt)*) => {
+                ::log_args_runtime::log_with_context!(::tracing::trace, ::log_args_runtime::get_context(), #(#context_fields,)* $($t)*);
+            };
+        }
+    }
 }

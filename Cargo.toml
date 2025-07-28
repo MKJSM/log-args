@@ -1,6 +1,6 @@
 [package]
 name = "log_args"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 autotests = false
 authors = ["JS <mkjsm57@gmail.com>"]
@@ -19,24 +19,81 @@ categories = [
 [lib]
 proc-macro = true
 
+[features]
+default = []
+# Function name logging with different casing styles
+function-names-snake = []     # snake_case (original function name)
+function-names-camel = []     # camelCase (first letter lowercase)
+function-names-pascal = []    # PascalCase (first letter uppercase)
+function-names-screaming = [] # SCREAMING_SNAKE_CASE
+function-names-kebab = []     # kebab-case
+
+# Backward compatibility alias
+function-names = ["function-names-pascal"]
+
 [dependencies]
 syn = { version = "2.0.104", features = ["full"] }
 quote = "1.0.40"
 proc-macro2 = "1.0.95"
-tracing-subscriber = { version = "0.3.19", features = ["fmt"] }
+tracing-subscriber = { version = "0.3.19", features = [
+    "fmt",
+    "registry",
+    "json",
+] }
+log-args-runtime = { path = "./log_args_runtime" }
 
 [dev-dependencies]
 trybuild = "1.0.106"
-tracing = "0.1.41"
-tracing-subscriber = "0.3.19"
 futures = "0.3.31"
 tokio = { version = "1.0", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["registry", "json", "fmt"] }
+tracing-bunyan-formatter = "0.3.9"
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+
+# Production-ready examples showcasing all macro features
+[[example]]
+name = "params"
+path = "examples/params.rs"
 
 [[example]]
-name = "demo"
-path = "examples/main.rs"
+name = "custom"
+path = "examples/custom.rs"
+
+[[example]]
+name = "fields"
+path = "examples/fields.rs"
+
+[[example]]
+name = "span"
+path = "examples/span.rs"
+
+[[example]]
+name = "all"
+path = "examples/all.rs"
+
+[[example]]
+name = "full"
+path = "examples/full.rs"
+
 
 [[test]]
-name = "trybuild"
-path = "tests/trybuild.rs"
+name = "integration_tests"
+path = "tests/integration_tests.rs"
+harness = true
+
+[[test]]
+name = "function_name_tests"
+path = "tests/function_name_tests.rs"
+harness = true
+
+[[test]]
+name = "complex_expressions_tests"
+path = "tests/complex_expressions_tests.rs"
+harness = true
+
+[[test]]
+name = "current_attribute_tests"
+path = "tests/current_attribute_tests.rs"
 harness = true

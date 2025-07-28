@@ -1,0 +1,21 @@
+[package]
+name = "log-args-runtime"
+version = "0.1.1"
+edition = "2021"
+autotests = false
+authors = ["JS <mkjsm57@gmail.com>"]
+description = "A simple procedural macro to log function arguments using the tracing crate."
+license = "MIT OR Apache-2.0"
+homepage = "https://github.com/MKJSM/log-args"
+repository = "https://github.com/MKJSM/log-args"
+rust-version = "1.65"
+keywords = ["logging", "tracing", "macro", "proc-macro", "arguments"]
+categories = [
+    "development-tools::debugging",
+    "development-tools::procedural-macro-helpers",
+]
+
+[dependencies]
+serde_json = "1.0"
+tracing = "0.1"
+tokio = { version = "1", features = ["rt", "macros"] }
