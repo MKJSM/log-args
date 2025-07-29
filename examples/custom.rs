@@ -17,10 +17,11 @@
 //! - Multiple data types in custom fields
 
 use log_args::params;
+use serde::Serialize;
 use tracing::info;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 #[allow(dead_code)]
 struct ApiRequest {
     endpoint: String,
@@ -28,7 +29,7 @@ struct ApiRequest {
     user_id: Option<u64>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 #[allow(dead_code)]
 struct DatabaseConfig {
     host: String,

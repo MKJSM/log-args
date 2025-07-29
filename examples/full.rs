@@ -22,11 +22,12 @@
 
 use log_args::params;
 use log_args_runtime::{info as ctx_info, warn as ctx_warn};
+use serde::Serialize;
 use std::collections::HashMap;
 use tracing::{error, info, warn};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 #[allow(dead_code)]
 struct User {
     id: u64,
@@ -36,7 +37,7 @@ struct User {
     profile: UserProfile,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 #[allow(dead_code)]
 struct UserProfile {
     first_name: String,
@@ -44,7 +45,7 @@ struct UserProfile {
     preferences: UserPreferences,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 #[allow(dead_code)]
 struct UserPreferences {
     theme: String,
@@ -52,7 +53,7 @@ struct UserPreferences {
     notifications_enabled: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 #[allow(dead_code)]
 struct ApiKey {
     key_id: String,
@@ -60,7 +61,7 @@ struct ApiKey {
     permissions: Vec<String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 #[allow(dead_code)]
 struct UserOperation {
     operation_type: String,

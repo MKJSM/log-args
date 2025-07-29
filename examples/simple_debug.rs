@@ -1,9 +1,8 @@
 use log_args::params;
 use log_args_runtime::{set_global_context, get_context_value};
-use tracing::info;
 
 /// Test function that sets global context
-#[params(span, custom(company_id = "test_company_123".to_string()))]
+#[params(span, custom(company_id = "test_company_123"))]
 pub fn parent_function() {
     // Manually test global context
     set_global_context("manual_test", "manual_value");
@@ -12,8 +11,8 @@ pub fn parent_function() {
     child_function();
 }
 
-/// Test function that should inherit context
-#[params]
+/// Test function that inherits context
+#[params(fields())]
 pub fn child_function() {
     println!("Child function: Checking context");
     

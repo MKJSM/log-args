@@ -17,10 +17,11 @@
 //! - Async function support with all parameters
 
 use log_args::params;
+use serde::Serialize;
 use tracing::info;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 #[allow(dead_code)]
 struct User {
     id: u64,
@@ -28,7 +29,7 @@ struct User {
     email: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 #[allow(dead_code)]
 struct Config {
     timeout: u32,

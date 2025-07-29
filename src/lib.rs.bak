@@ -1,0 +1,730 @@
+use proc_macro::TokenStream;
+use quote::quote;
+use syn::parse::{Parse, Parser};
+use syn::punctuated::Punctuated;
+use syn::{parenthesized, Block, Expr, FnArg, Ident, ImplItemFn, ItemFn, MetaNameValue, Pat, Token};
+
+#[proc_macro_attribute]
+pub fn params(args: TokenStream, input: TokenStream) -> TokenStream {
+    let mut item = if let Ok(item_fn) = syn::parse::<syn::ItemFn>(input.clone()) {
+        FnItem::Item(item_fn)
+    } else if let Ok(impl_item_fn) = syn::parse::<syn::ImplItemFn>(input.clone()) {
+        FnItem::ImplItem(impl_item_fn)
+    } else {
+        return syn::Error::new_spanned(
+            proc_macro2::TokenStream::from(input),
+            "The #[params] attribute can only be applied to functions or methods.",
+        )
+        .to_compile_error()
+        .into();
+    };
+
+    let allow_unused_macros_attr: syn::Attribute = syn::parse_quote! { #[allow(unused_macros)] };
+    item.attrs_mut().push(allow_unused_macros_attr);
+
+    let attrs = match Punctuated::<Attribute, Token![,]>::parse_terminated.parse(args) {
+        Ok(attrs) => attrs,
+        Err(e) => return e.to_compile_error().into(),
+    };
+
+    let config = AttrConfig::from_attributes(attrs);
+    let is_async = item.sig().asyncness.is_some();
+
+    let local_fields_quote = get_context_fields_quote(&item, &config);
+    let log_redefines = get_log_redefines_with_fields(is_async, config.span);
+
+    let push_logic = if config.span {
+        let get_parent_context = if is_async {
+            quote! { ::log_args_runtime::get_async_context() }
+        } else {
+            quote! { ::log_args_runtime::get_context() }
+        };
+
+        let push_context = if is_async {
+            quote! { ::log_args_runtime::push_async_context }
+        } else {
+            quote! { ::log_args_runtime::push_context }
+        };
+
+        quote! {
+            let mut new_context_for_push = #get_parent_context;
+            {
+                let mut map = ::std::collections::HashMap::new();
+                #(#local_fields_quote)*
+                new_context_for_push.extend(map.into_iter());
+            }
+            let _context_guard = #push_context(new_context_for_push);
+        }
+    } else {
+        quote! {}
+    };
+
+    let original_block = item.block();
+    let new_block = quote! {
+        {
+            #push_logic
+
+            let local_fields = {
+                let mut map = ::std::collections::HashMap::new();
+                #(#local_fields_quote)*
+                map
+            };
+
+            #log_redefines
+
+            #original_block
+        }
+    };
+
+    *item.block_mut() = syn::parse2(new_block).expect("Failed to parse new block");
+
+    TokenStream::from(quote! { #item })
+}
+
+enum Attribute {
+    Fields(Punctuated<Expr, Token![,]>),
+    Custom(Punctuated<MetaNameValue, Token![,]>),
+    Span,
+    All,
+}
+
+impl Parse for Attribute {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let ident: Ident = input.parse()?;
+        if ident == "fields" {
+            let content;
+            parenthesized!(content in input);
+            Ok(Attribute::Fields(Punctuated::parse_terminated(&content)?))
+        } else if ident == "custom" {
+            let content;
+            parenthesized!(content in input);
+            Ok(Attribute::Custom(Punctuated::parse_terminated(&content)?))
+        } else if ident == "span" {
+            Ok(Attribute::Span)
+        } else if ident == "all" {
+            Ok(Attribute::All)
+        } else {
+            Err(syn::Error::new_spanned(ident, "unknown attribute"))
+        }
+    }
+}
+
+struct AttrConfig {
+    fields: Vec<syn::Expr>,
+    custom: Vec<syn::MetaNameValue>,
+    span: bool,
+    all_params: bool,
+}
+
+impl AttrConfig {
+    fn from_attributes(attrs: Punctuated<Attribute, Token![,]>) -> Self {
+        let mut fields = Vec::new();
+        let mut custom = Vec::new();
+        let mut span = false;
+        let mut all_params = false;
+
+        for attr in attrs {
+            match attr {
+                Attribute::Fields(f) => fields.extend(f.into_iter()),
+                Attribute::Custom(c) => custom.extend(c.into_iter()),
+                Attribute::Span => span = true,
+                Attribute::All => all_params = true,
+            }
+        }
+
+        // By default, span is true if no attributes are provided or only `all` is provided.
+        if fields.is_empty() && custom.is_empty() && !span {
+            span = true;
+        }
+
+        Self { fields, custom, span, all_params }
+    }
+}
+
+enum FnItem {
+    Item(ItemFn),
+    ImplItem(ImplItemFn),
+}
+
+impl FnItem {
+    fn sig(&self) -> &syn::Signature {
+        match self {
+            FnItem::Item(item) => &item.sig,
+            FnItem::ImplItem(item) => &item.sig,
+        }
+    }
+
+    fn block(&self) -> &Block {
+        match self {
+            FnItem::Item(item) => &item.block,
+            FnItem::ImplItem(item) => &item.block,
+        }
+    }
+
+    fn block_mut(&mut self) -> &mut Block {
+        match self {
+            FnItem::Item(item) => &mut item.block,
+            FnItem::ImplItem(item) => &mut item.block,
+        }
+    }
+
+    fn attrs_mut(&mut self) -> &mut Vec<syn::Attribute> {
+        match self {
+            FnItem::Item(item) => &mut item.attrs,
+            FnItem::ImplItem(item) => &mut item.attrs,
+        }
+    }
+}
+
+enum Attribute {
+    Fields(Punctuated<Expr, Token![,]>),
+    Custom(Punctuated<MetaNameValue, Token![,]>),
+    Span,
+    All,
+}
+
+impl Parse for Attribute {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let ident: Ident = input.parse()?;
+        if ident == "fields" {
+            let content;
+            parenthesized!(content in input);
+            Ok(Attribute::Fields(Punctuated::parse_terminated(&content)?))
+        } else if ident == "custom" {
+            let content;
+            parenthesized!(content in input);
+            Ok(Attribute::Custom(Punctuated::parse_terminated(&content)?))
+        } else if ident == "span" {
+            Ok(Attribute::Span)
+        } else if ident == "all" {
+            Ok(Attribute::All)
+        } else {
+            Err(syn::Error::new_spanned(ident, "unknown attribute"))
+        }
+    }
+}
+
+struct AttrConfig {
+    fields: Vec<syn::Expr>,
+    custom: Vec<syn::MetaNameValue>,
+    span: bool,
+    all_params: bool,
+}
+
+impl AttrConfig {
+    fn from_attributes(attrs: Punctuated<Attribute, Token![,]>) -> Self {
+        let mut fields = Vec::new();
+        let mut custom = Vec::new();
+        let mut span = false;
+        let mut all_params = false;
+
+        for attr in attrs {
+            match attr {
+                Attribute::Fields(f) => fields.extend(f.into_iter()),
+                Attribute::Custom(c) => custom.extend(c.into_iter()),
+                Attribute::Span => span = true,
+                Attribute::All => all_params = true,
+            }
+        }
+
+        // By default, span is true if no attributes are provided or only `all` is provided.
+        if fields.is_empty() && custom.is_empty() && !span {
+            span = true;
+        }
+
+        Self { fields, custom, span, all_params }
+    }
+}
+
+enum FnItem {
+    Item(ItemFn),
+    ImplItem(ImplItemFn),
+}
+
+impl FnItem {
+    fn sig(&self) -> &syn::Signature {
+        match self {
+            FnItem::Item(item) => &item.sig,
+            FnItem::ImplItem(item) => &item.sig,
+        }
+    }
+
+    fn block(&self) -> &Block {
+        match self {
+            FnItem::Item(item) => &item.block,
+            FnItem::ImplItem(item) => &item.block,
+        }
+    }
+
+    fn block_mut(&mut self) -> &mut Block {
+        match self {
+            FnItem::Item(item) => &mut item.block,
+            FnItem::ImplItem(item) => &mut item.block,
+        }
+    }
+
+    fn attrs_mut(&mut self) -> &mut Vec<syn::Attribute> {
+        match self {
+            FnItem::Item(item) => &mut item.attrs,
+            FnItem::ImplItem(item) => &mut item.attrs,
+        }
+    }
+}
+
+fn get_context_fields_quote(item: &FnItem, config: &AttrConfig) -> Vec<proc_macro2::TokenStream> {
+    let mut fields_to_add = Vec::new();
+
+    let fn_name = item.sig().ident.to_string();
+    let fn_name_str = fn_name.as_str();
+
+    let function_name_casing = 
+        if cfg!(feature = "function-names-snake") {
+            quote! { #fn_name_str.to_string() }
+        } else if cfg!(feature = "function-names-camel") {
+            quote! { log_args_runtime::to_camel_case(#fn_name_str) }
+        } else if cfg!(feature = "function-names-pascal") {
+            quote! { log_args_runtime::to_pascal_case(#fn_name_str) }
+        } else if cfg!(feature = "function-names-screaming") {
+            quote! { log_args_runtime::to_screaming_snake_case(#fn_name_str) }
+        } else if cfg!(feature = "function-names-kebab") {
+            quote! { log_args_runtime::to_kebab_case(#fn_name_str) }
+        } else {
+            quote! { #fn_name_str.to_string() } // Default to snake_case if no feature is set
+        };
+
+    if cfg!(any(feature = "function-names-snake", feature = "function-names-camel", feature = "function-names-pascal", feature = "function-names-screaming", feature = "function-names-kebab")) {
+        fields_to_add.push(quote! {
+            map.insert("function".to_string(), #function_name_casing);
+        });
+    }
+
+    let log_all = config.all_params || (config.fields.is_empty() && !config.all_params);
+
+    for arg in &item.sig().inputs {
+        if let FnArg::Typed(pat_type) = arg {
+            if let Pat::Ident(pat_ident) = &*pat_type.pat {
+                let ident = &pat_ident.ident;
+                let ident_str = ident.to_string();
+
+                if ident_str == "self" {
+                    continue;
+                }
+
+                let should_log = if log_all {
+                    true
+                } else {
+                    config.fields.iter().any(|expr| {
+                        let expr_str = quote!(#expr).to_string();
+                        expr_str == ident_str
+                    })
+                };
+
+                if should_log {
+                    fields_to_add.push(quote! {
+                        let value_str = serde_json::to_string(&#ident).unwrap_or_else(|_| "<unserializable>".to_string());
+                        map.insert(#ident_str.to_string(), value_str.trim_matches('"').to_string());
+                    });
+                }
+            }
+        }
+    }
+
+    if !log_all {
+        for expr in &config.fields {
+            let expr_str = quote!(#expr).to_string().replace(' ', "");
+            if expr_str.contains('.') {
+                fields_to_add.push(quote! {
+                    let value_str = serde_json::to_string(&#expr).unwrap_or_else(|_| "<unserializable>".to_string());
+                    map.insert(#expr_str.to_string(), value_str.trim_matches('"').to_string());
+                });
+            }
+        }
+    }
+
+    for custom_field in &config.custom {
+        let key = &custom_field.path;
+        let value = &custom_field.value;
+        let key_str = quote!(#key).to_string();
+        fields_to_add.push(quote! {
+            let value_str = serde_json::to_string(&#value).unwrap_or_else(|_| "<unserializable>".to_string());
+            map.insert(#key_str.to_string(), value_str.trim_matches('"').to_string());
+        });
+    }
+
+    let fn_name = item.sig().ident.to_string();
+    let fn_name_str = fn_name.as_str();
+
+    let function_name_casing = 
+        if cfg!(feature = "function-names-snake") {
+            quote! { #fn_name_str.to_string() }
+        } else if cfg!(feature = "function-names-camel") {
+            quote! { log_args_runtime::to_camel_case(#fn_name_str) }
+        } else if cfg!(feature = "function-names-pascal") {
+            quote! { log_args_runtime::to_pascal_case(#fn_name_str) }
+        } else if cfg!(feature = "function-names-screaming") {
+            quote! { log_args_runtime::to_screaming_snake_case(#fn_name_str) }
+        } else if cfg!(feature = "function-names-kebab") {
+            quote! { log_args_runtime::to_kebab_case(#fn_name_str) }
+        } else {
+            quote! { #fn_name_str.to_string() } // Default to snake_case if no feature is set
+        };
+
+    if cfg!(any(feature = "function-names-snake", feature = "function-names-camel", feature = "function-names-pascal", feature = "function-names-screaming", feature = "function-names-kebab")) {
+        fields_to_add.push(quote! {
+            map.insert("function".to_string(), #function_name_casing);
+        });
+    }
+
+    let log_all = config.all_params || (config.fields.is_empty() && !config.all_params);
+
+    for arg in &item.sig().inputs {
+        if let FnArg::Typed(pat_type) = arg {
+            if let Pat::Ident(pat_ident) = &*pat_type.pat {
+                let ident = &pat_ident.ident;
+                let ident_str = ident.to_string();
+
+                if ident_str == "self" {
+                    continue;
+                }
+
+                let should_log = if log_all {
+                    true
+                } else {
+                    config.fields.iter().any(|expr| {
+                        let expr_str = quote!(#expr).to_string();
+                        expr_str == ident_str
+                    })
+                };
+
+                if should_log {
+                    fields_to_add.push(quote! {
+                        let value_str = serde_json::to_string(&#ident).unwrap_or_else(|_| "<unserializable>".to_string());
+                        map.insert(#ident_str.to_string(), value_str.trim_matches('"').to_string());
+                    });
+                }
+            }
+        }
+    }
+
+    if !log_all {
+        for expr in &config.fields {
+            let expr_str = quote!(#expr).to_string().replace(' ', "");
+            if expr_str.contains('.') {
+                fields_to_add.push(quote! {
+                    let value_str = serde_json::to_string(&#expr).unwrap_or_else(|_| "<unserializable>".to_string());
+                    map.insert(#expr_str.to_string(), value_str.trim_matches('"').to_string());
+                });
+            }
+        }
+    }
+
+    for custom_field in &config.custom {
+        let key = &custom_field.path;
+        let value = &custom_field.value;
+        let key_str = quote!(#key).to_string();
+        fields_to_add.push(quote! {
+            let value_str = serde_json::to_string(&#value).unwrap_or_else(|_| "<unserializable>".to_string());
+            map.insert(#key_str.to_string(), value_str.trim_matches('"').to_string());
+        });
+    }
+
+    fields_to_add
+}
+
+fn get_log_redefines_with_fields(is_async: bool, span_enabled: bool) -> proc_macro2::TokenStream {
+    let get_parent_context_logic = if span_enabled {
+        if is_async {
+            quote! { ::log_args_runtime::get_async_context() }
+        } else {
+            quote! { ::log_args_runtime::get_context() }
+        }
+    } else {
+        quote! { ::std::collections::HashMap::new() }
+    };
+
+    quote! {
+        macro_rules! info {
+            ($($t:tt)*) => {
+                let mut all_fields = #get_parent_context_logic;
+                all_fields.extend(local_fields.clone());
+                ::tracing::info!(..all_fields, $($t)*)
+            };
+        }
+        macro_rules! warn {
+            ($($t:tt)*) => {
+                let mut all_fields = #get_parent_context_logic;
+                all_fields.extend(local_fields.clone());
+                ::tracing::warn!(..all_fields, $($t)*)
+            };
+        }
+        macro_rules! error {
+            ($($t:tt)*) => {
+                let mut all_fields = #get_parent_context_logic;
+                all_fields.extend(local_fields.clone());
+                ::tracing::error!(..all_fields, $($t)*)
+            };
+        }
+        macro_rules! debug {
+            ($($t:tt)*) => {
+                let mut all_fields = #get_parent_context_logic;
+                all_fields.extend(local_fields.clone());
+                ::tracing::debug!(..all_fields, $($t)*)
+            };
+        }
+        macro_rules! trace {
+            ($($t:tt)*) => {
+                let mut all_fields = #get_parent_context_logic;
+                all_fields.extend(local_fields.clone());
+                ::tracing::trace!(..all_fields, $($t)*)
+            };
+        }
+    }
+}
+
+// Convert snake_case to camelCase (first letter lowercase)
+#[cfg(feature = "function-names-camel")]
+fn to_camel_case(snake_case: &str) -> String {
+    let words: Vec<&str> = snake_case.split('_').collect();
+    if words.is_empty() {
+        return String::new();
+    }
+
+    let mut result = words[0].to_lowercase();
+    for word in &words[1..] {
+        if !word.is_empty() {
+            let mut chars = word.chars();
+            if let Some(first) = chars.next() {
+                result.push_str(&first.to_uppercase().collect::<String>());
+                result.push_str(&chars.as_str().to_lowercase());
+            }
+        }
+    }
+    result
+}
+
+// Convert snake_case to PascalCase (first letter uppercase)
+#[allow(dead_code)]
+#[cfg(any(
+    feature = "function-names-pascal",
+    not(any(
+        feature = "function-names-snake",
+        feature = "function-names-camel",
+        feature = "function-names-screaming",
+        feature = "function-names-kebab"
+    ))
+))]
+fn to_pascal_case(snake_case: &str) -> String {
+    snake_case
+        .split('_')
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(first) => {
+                    first.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase()
+                }
+            }
+        })
+        .collect()
+}
+
+// Convert snake_case to SCREAMING_SNAKE_CASE
+#[cfg(feature = "function-names-screaming")]
+fn to_screaming_snake_case(snake_case: &str) -> String {
+    snake_case.to_uppercase()
+}
+
+// Convert snake_case to kebab-case
+#[cfg(feature = "function-names-kebab")]
+fn to_kebab_case(snake_case: &str) -> String {
+    snake_case.replace('_', "-")
+}
+
+fn get_context_map_for_span(item: &FnItem, config: &AttrConfig) -> proc_macro2::TokenStream {
+    let mut fields_to_log = vec![];
+
+    // Store all field types in span context for dynamic lookup
+    // This ensures that span context lookup works for ALL field types
+    
+    // 1. Add all parameters if requested
+    if config.all_params {
+        let all_args = get_all_args(item);
+        for ident in all_args {
+            let ident_str = ident.to_string();
+            fields_to_log.push(quote! {
+                new_context.insert(#ident_str.to_string(), format!("{:?}", #ident));
+            });
+        }
+    }
+    
+    // 2. Add explicitly specified fields
+    if !config.fields.is_empty() {
+        for field_expr in &config.fields {
+            let key_str = quote!(#field_expr).to_string().replace(' ', "");
+            fields_to_log.push(quote! {
+                new_context.insert(#key_str.to_string(), format!("{:?}", &#field_expr));
+            });
+        }
+    }
+    
+    // 3. Add custom fields (always included)
+    for nv in &config.custom {
+        let key = &nv.path;
+        let value = &nv.value;
+        let key_str = quote!(#key).to_string().replace(' ', "");
+        
+        // For span context, use the original expression directly
+        // This will be evaluated before any moves happen
+        fields_to_log.push(quote! {
+            new_context.insert(key_str.to_string(), format!("{:?}", #value).trim_matches('"').to_string());
+        });
+        
+        // Also store globally for cross-boundary persistence
+        fields_to_log.push(quote! {
+            ::log_args_runtime::set_global_context(&#key_str, &format!("{}", #value));
+        });
+    }
+    
+    // 4. Add current fields (these are also stored in context for consistency)
+    for current_field in &config.current {
+        let field_name = quote! { #current_field }.to_string();
+        let field_key = field_name.replace(' ', "");
+        fields_to_log.push(quote! {
+            new_context.insert(#field_key.to_string(), format!("{:?}", #current_field));
+        });
+    }
+
+    // Add function name to context if any function-names feature is enabled (always propagated)
+    #[cfg(any(
+        feature = "function-names-snake",
+        feature = "function-names-camel",
+        feature = "function-names-pascal",
+        feature = "function-names-screaming",
+        feature = "function-names-kebab"
+    ))]
+    {
+        let function_name = get_function_name(item);
+        fields_to_log.push(quote! {
+            new_context.insert("function".to_string(), #function_name.to_string());
+        });
+    }
+
+    quote! {
+        {
+            let mut new_context = ::std::collections::HashMap::new();
+            #(#fields_to_log)*
+            new_context
+        }
+    }
+}
+
+fn get_all_args(item: &FnItem) -> Vec<Ident> {
+    item.sig()
+        .inputs
+        .iter()
+        .filter_map(|arg| {
+            if let FnArg::Typed(pt) = arg {
+                if let Pat::Ident(pi) = &*pt.pat {
+                    if pi.ident != "self" {
+                        return Some(pi.ident.clone());
+                    }
+                }
+            }
+            None
+        })
+        .collect()
+}
+
+enum FnItem {
+    Item(syn::ItemFn),
+    ImplItem(syn::ImplItemFn),
+}
+
+impl quote::ToTokens for FnItem {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        match self {
+            FnItem::Item(i) => i.to_tokens(tokens),
+            FnItem::ImplItem(i) => i.to_tokens(tokens),
+        }
+    }
+}
+
+impl FnItem {
+    fn attrs_mut(&mut self) -> &mut Vec<syn::Attribute> {
+        match self {
+            FnItem::Item(item_fn) => &mut item_fn.attrs,
+            FnItem::ImplItem(impl_item_fn) => &mut impl_item_fn.attrs,
+        }
+    }
+
+    fn sig(&self) -> &syn::Signature {
+        match self {
+            FnItem::Item(i) => &i.sig,
+            FnItem::ImplItem(i) => &i.sig,
+        }
+    }
+
+    fn block(&self) -> &syn::Block {
+        match self {
+            FnItem::Item(i) => &i.block,
+            FnItem::ImplItem(i) => &i.block,
+        }
+    }
+
+    fn block_mut(&mut self) -> &mut syn::Block {
+        match self {
+            FnItem::Item(i) => &mut i.block,
+            FnItem::ImplItem(i) => &mut i.block,
+        }
+    }
+}
+
+fn get_log_redefines_with_fields(is_async: bool, span_enabled: bool) -> proc_macro2::TokenStream {
+    let get_parent_context_logic = if span_enabled {
+        if is_async {
+            quote! { ::log_args_runtime::get_async_context() }
+        } else {
+            quote! { ::log_args_runtime::get_context() }
+        }
+    } else {
+        quote! { ::std::collections::HashMap::new() }
+    };
+
+    quote! {
+        macro_rules! info {
+            ($($t:tt)*) => {
+                let mut all_fields = #get_parent_context_logic;
+                all_fields.extend(local_fields.clone());
+                ::tracing::info!(..all_fields, $($t)*)
+            };
+        }
+        macro_rules! warn {
+            ($($t:tt)*) => {
+                let mut all_fields = #get_parent_context_logic;
+                all_fields.extend(local_fields.clone());
+                ::tracing::warn!(..all_fields, $($t)*)
+            };
+        }
+        macro_rules! error {
+            ($($t:tt)*) => {
+                let mut all_fields = #get_parent_context_logic;
+                all_fields.extend(local_fields.clone());
+                ::tracing::error!(..all_fields, $($t)*)
+            };
+        }
+        macro_rules! debug {
+            ($($t:tt)*) => {
+                let mut all_fields = #get_parent_context_logic;
+                all_fields.extend(local_fields.clone());
+                ::tracing::debug!(..all_fields, $($t)*)
+            };
+        }
+        macro_rules! trace {
+            ($($t:tt)*) => {
+                let mut all_fields = #get_parent_context_logic;
+                all_fields.extend(local_fields.clone());
+                ::tracing::trace!(..all_fields, $($t)*)
+            };
+        }
+    }
+}

@@ -34,10 +34,11 @@
 //! ```
 
 use log_args::params;
+use serde::Serialize;
 use tracing::info;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 #[allow(dead_code)]
 struct User {
     id: u64,

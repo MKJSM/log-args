@@ -170,96 +170,21 @@ macro_rules! add_context_fields {
     };
 }
 
-#[macro_export]
-macro_rules! log_with_context {
-    ($log_macro:path, $context:expr, $($args:tt)*) => {
-        {
-            let ctx = $context;
-            if ctx.is_empty() {
-                $log_macro!($($args)*);
-            } else {
-                // Completely dynamic approach - NO hardcoded field names whatsoever
-                // Since Rust macros cannot dynamically generate field names at compile time,
-                // we use a runtime approach that works with any field names
-                
-                // Create individual log fields dynamically using tracing's structured logging
-                // This approach works with any field names without hardcoding
-                
-                // Create a span with dynamic fields and log within it
-                let span = ::tracing::info_span!(
-                    "context",
-                    // We can't dynamically create field names in the span macro
-                    // So we'll use the record API instead
-                );
-                
-                // Record all context fields dynamically
-                for (key, value) in ctx.iter() {
-                    span.record(key.as_str(), &::tracing::field::display(value));
-                }
-                
-                // Execute the log within the context span
-                let _enter = span.enter();
-                $log_macro!($($args)*);
-                
-                // Alternative: if span approach doesn't work, fall back to context string
-                // This ensures we never lose context information
-                drop(_enter);
-                drop(span);
-                
-                // Fallback: create a single context field with all data
-                let mut context_fields = Vec::new();
-                for (key, value) in ctx.iter() {
-                    context_fields.push(format!("{}={}", key, value));
-                }
-                if !context_fields.is_empty() {
-                    let context_data = context_fields.join(" ");
-                    // This logs context as a single structured field
-                    // Individual fields will be available through the span above
-                    $log_macro!(context = %context_data, $($args)*);
-                } else {
-                    $log_macro!($($args)*);
-                }
-            }
-        }
-    };
-}
+// Removed log_with_context macro to eliminate duplicate logging
+// All logging now uses direct tracing macros without context string generation
 
-/// Global context-aware logging macros that inherit parent context
-/// These can be used in any function to automatically include context from parent functions with span
-#[macro_export]
-macro_rules! info {
-    ($($t:tt)*) => {
-        $crate::log_with_context!(::tracing::info, $crate::get_context(), $($t)*);
-    };
-}
+// Removed all context-related macros to eliminate duplicate logging
+// All logging now uses direct tracing macros without context string generation
 
-#[macro_export]
-macro_rules! warn {
-    ($($t:tt)*) => {
-        $crate::log_with_context!(::tracing::warn, $crate::get_context(), $($t)*);
-    };
-}
+// Removed all runtime context macros to eliminate duplicate logging
+// All context propagation is now handled via direct field injection in the main macro
+// Child functions should use regular tracing macros (info!, warn!, etc.) which will
+// automatically inherit context through the macro redefinition system
 
-#[macro_export]
-macro_rules! error {
-    ($($t:tt)*) => {
-        $crate::log_with_context!(::tracing::error, $crate::get_context(), $($t)*);
-    };
-}
-
-#[macro_export]
-macro_rules! debug {
-    ($($t:tt)*) => {
-        $crate::log_with_context!(::tracing::debug, $crate::get_context(), $($t)*);
-    };
-}
-
-#[macro_export]
-macro_rules! trace {
-    ($($t:tt)*) => {
-        $crate::log_with_context!(::tracing::trace, $crate::get_context(), $($t)*);
-    };
-}
+// Completely removed all runtime macros to eliminate duplicate logging
+// All context propagation is now handled via direct field injection in the main macro
+// Child functions should use regular tracing macros which will inherit context
+// through the macro redefinition system in functions with #[params]
 
 /// Automatically capture and preserve current context for function execution
 /// This ensures context is maintained across function boundaries without user intervention
@@ -342,58 +267,9 @@ where
 /// This function retrieves all context fields from the current span context
 /// and formats them as a string for logging
 pub fn get_inherited_context_string() -> String {
-    let mut context_parts = Vec::new();
-    
-    // First, try to get context from tracing span (most reliable for cross-boundary propagation)
-    let current_span = tracing::Span::current();
-    if !current_span.is_none() {
-        // Try to extract fields from the current span
-        // This works across async boundaries when spans are properly propagated
-        // Note: Direct span field extraction is complex, so we rely on other methods
-    }
-    
-    // Try async context stack (most likely to have the context)
-    if let Ok(stack) = ASYNC_CONTEXT_STACK.try_with(|stack| stack.borrow().clone()) {
-        // Search through all contexts in the stack, not just the most recent
-        for context_map in stack.iter().rev() {
-            for (key, value) in context_map {
-                // Skip function name to avoid duplication
-                if key != "function" && !context_parts.iter().any(|p: &String| p.starts_with(&format!("{}=", key))) {
-                    context_parts.push(format!("{}={}", key, value));
-                }
-            }
-        }
-    }
-    
-    // Also try sync context stack and merge results
-    CONTEXT_STACK.with(|stack| {
-        let stack = stack.borrow();
-        for context_map in stack.iter().rev() {
-            for (key, value) in context_map {
-                // Skip function name and avoid duplicates
-                if key != "function" && !context_parts.iter().any(|p: &String| p.starts_with(&format!("{}=", key))) {
-                    context_parts.push(format!("{}={}", key, value));
-                }
-            }
-        }
-    });
-    
-    // If still no context, try global context store (for cross-boundary persistence)
-    if context_parts.is_empty() {
-        if let Some(global_context) = get_global_context() {
-            for (key, value) in global_context {
-                if key != "function" {
-                    context_parts.push(format!("{}={}", key, value));
-                }
-            }
-        }
-    }
-    
-    if context_parts.is_empty() {
-        "<no_context>".to_string()
-    } else {
-        context_parts.join(",")
-    }
+    // Context string generation completely removed to eliminate duplicate logging
+    // All context is now handled via direct field injection only
+    String::new()
 }
 
 /// Get inherited context fields as individual key-value pairs

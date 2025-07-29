@@ -18,11 +18,11 @@
 //! - Context inheritance in child functions
 
 use log_args::params;
-use log_args_runtime::{info as info_ctx, warn as warn_ctx};
-use tracing::info;
+use serde::Serialize;
+use tracing::{info, warn};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 #[allow(dead_code)]
 struct User {
     id: u64,
@@ -31,7 +31,7 @@ struct User {
     role: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 #[allow(dead_code)]
 struct RequestContext {
     request_id: String,
@@ -55,19 +55,19 @@ fn process_user_request(user: User, context: RequestContext) {
 
 /// Child function that receives context from parent span.
 fn validate_user_permissions(role: String) {
-    info_ctx!("Validating user permissions");
+    info!("Validating user permissions");
 
     match role.as_str() {
-        "admin" => info_ctx!("Admin permissions granted"),
-        "user" => info_ctx!("Standard user permissions granted"),
-        _ => warn_ctx!("Unknown role, using default permissions"),
+        "admin" => info!("Admin permissions granted"),
+        "user" => info!("Standard user permissions granted"),
+        _ => warn!("Unknown role, using default permissions"),
     }
 }
 
 /// Another child function that inherits context.
 fn log_user_activity(_user_id: u64) {
-    info_ctx!("Logging user activity");
-    info_ctx!("User activity logged successfully");
+    info!("Logging user activity");
+    info!("User activity logged successfully");
 }
 
 /// Database operation with selective field propagation.
@@ -86,14 +86,14 @@ fn perform_database_operation(user: User, operation: String, _sensitive_data: St
 
 /// Child function inheriting selective context.
 fn connect_to_database() {
-    info_ctx!("Establishing database connection");
-    info_ctx!("Database connection established");
+    info!("Establishing database connection");
+    info!("Database connection established");
 }
 
 /// Another child function with inherited selective context.
 fn execute_query(_query_type: String) {
-    info_ctx!("Executing database query");
-    info_ctx!("Query execution completed");
+    info!("Executing database query");
+    info!("Query execution completed");
 }
 
 /// API request handling with custom fields in span.
@@ -113,18 +113,18 @@ fn handle_api_request(endpoint: String, _method: String) {
 
 /// Child functions inherit custom fields from parent span.
 fn validate_request_format() {
-    info_ctx!("Validating request format");
-    info_ctx!("Request format is valid");
+    info!("Validating request format");
+    info!("Request format is valid");
 }
 
 fn process_api_logic(_endpoint: String) {
-    info_ctx!("Processing API logic");
-    info_ctx!("API logic processing completed");
+    info!("Processing API logic");
+    info!("API logic processing completed");
 }
 
 fn send_response() {
-    info_ctx!("Sending API response");
-    info_ctx!("Response sent successfully");
+    info!("Sending API response");
+    info!("Response sent successfully");
 }
 
 /// Async function with span context propagation.
@@ -142,22 +142,22 @@ async fn send_notification_async(user_id: u64, notification_type: String, _templ
 
 /// Async child function with inherited context.
 async fn prepare_notification_data() {
-    info_ctx!("Preparing notification data");
+    info!("Preparing notification data");
 
     // Simulate async work
     tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
 
-    info_ctx!("Notification data prepared");
+    info!("Notification data prepared");
 }
 
 /// Another async child function.
 async fn deliver_notification(_notification_type: String) {
-    info_ctx!("Delivering notification");
+    info!("Delivering notification");
 
     // Simulate async delivery
     tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
 
-    info_ctx!("Notification delivered successfully");
+    info!("Notification delivered successfully");
 }
 
 /// Complex nested span hierarchy example.
@@ -176,62 +176,62 @@ fn process_order(order_id: String, customer_id: u64, _payment_info: String) {
 
 /// Level 1 child function.
 fn validate_order() {
-    info_ctx!("Validating order details");
+    info!("Validating order details");
 
     // This calls another child function
     check_inventory();
     validate_customer_info();
 
-    info_ctx!("Order validation completed");
+    info!("Order validation completed");
 }
 
 /// Level 2 child functions.
 fn check_inventory() {
-    info_ctx!("Checking product inventory");
-    info_ctx!("Inventory check passed");
+    info!("Checking product inventory");
+    info!("Inventory check passed");
 }
 
 fn validate_customer_info() {
-    info_ctx!("Validating customer information");
-    info_ctx!("Customer information is valid");
+    info!("Validating customer information");
+    info!("Customer information is valid");
 }
 
 /// Level 1 child function.
 fn process_payment() {
-    info_ctx!("Processing payment");
+    info!("Processing payment");
 
     // Another nested call
     charge_payment_method();
 
-    info_ctx!("Payment processed successfully");
+    info!("Payment processed successfully");
 }
 
 /// Level 2 child function.
 fn charge_payment_method() {
-    info_ctx!("Charging payment method");
-    info_ctx!("Payment method charged successfully");
+    info!("Charging payment method");
+    info!("Payment method charged successfully");
 }
 
 /// Level 1 child function.
 fn fulfill_order() {
-    info_ctx!("Fulfilling order");
+    info!("Fulfilling order");
 
     // More nested calls
     prepare_shipment();
     send_confirmation();
 
-    info_ctx!("Order fulfillment completed");
+    info!("Order fulfillment completed");
 }
 
 /// Level 2 child functions.
 fn prepare_shipment() {
-    info_ctx!("Preparing shipment");
-    info_ctx!("Shipment prepared");
+    info!("Preparing shipment");
+    info!("Shipment prepared");
 }
 
 fn send_confirmation() {
-    info_ctx!("Sending order confirmation");
-    info_ctx!("Order confirmation sent");
+    info!("Sending order confirmation");
+    info!("Order confirmation sent");
 }
 
 /// Order service for demonstrating method span propagation.
@@ -252,18 +252,18 @@ impl OrderService {
     }
 
     fn validate_items(&self) {
-        info_ctx!("Validating order items");
-        info_ctx!("All items are valid");
+        info!("Validating order items");
+        info!("All items are valid");
     }
 
     fn calculate_total(&self) {
-        info_ctx!("Calculating order total");
-        info_ctx!("Order total calculated");
+        info!("Calculating order total");
+        info!("Order total calculated");
     }
 
     fn save_to_database(&self) {
-        info_ctx!("Saving order to database");
-        info_ctx!("Order saved successfully");
+        info!("Saving order to database");
+        info!("Order saved successfully");
     }
 }
 
