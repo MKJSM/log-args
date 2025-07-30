@@ -42,7 +42,6 @@ struct RequestContext {
 /// Processes user request with span context propagation.
 /// All parameters are automatically propagated to child functions.
 /// (Span propagation is now enabled by default)
-#[params]
 fn process_user_request(user: User, context: RequestContext) {
     info!("Starting user request processing");
 
@@ -73,7 +72,6 @@ fn log_user_activity(_user_id: u64) {
 /// Database operation with selective field propagation.
 /// Only specified fields are propagated to child spans.
 /// (Span propagation is enabled by default, only fields() needed)
-#[params(fields(user.id, user.role, operation))]
 fn perform_database_operation(user: User, operation: String, _sensitive_data: String) {
     info!("Starting database operation");
 
@@ -99,7 +97,6 @@ fn execute_query(_query_type: String) {
 /// API request handling with custom fields in span.
 /// Custom fields are propagated to all child functions.
 /// (Span propagation is enabled by default)
-#[params(custom(service = "user-api", version = "2.1.0", environment = "production"))]
 fn handle_api_request(endpoint: String, _method: String) {
     info!("Handling API request");
 
@@ -129,7 +126,6 @@ fn send_response() {
 
 /// Async function with span context propagation.
 /// (Span propagation is enabled by default)
-#[params(fields(user_id, notification_type))]
 async fn send_notification_async(user_id: u64, notification_type: String, _template: String) {
     info!("Starting async notification process");
 
@@ -162,7 +158,6 @@ async fn deliver_notification(_notification_type: String) {
 
 /// Complex nested span hierarchy example.
 /// (Span propagation is enabled by default)
-#[params(fields(order_id, customer_id))]
 fn process_order(order_id: String, customer_id: u64, _payment_info: String) {
     info!("Starting order processing");
 
@@ -239,7 +234,7 @@ struct OrderService;
 
 impl OrderService {
     /// Creates order with span context in method.
-    #[params(span, custom(component = "order-service", version = "1.0.0"))]
+    
     fn create_order(&self, _customer_id: u64, _items: Vec<String>) {
         info!("Creating new order");
 

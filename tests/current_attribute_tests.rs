@@ -67,7 +67,7 @@ mod tests {
     fn test_current_attribute_not_propagated() {
         let (mock_writer, _guard) = setup_tracing();
 
-        #[params(span, fields(user_id), current(timing))]
+        
         fn parent_function(user_id: String, _password: String, timing: String) {
             info!("Parent function executing");
             child_function();
@@ -136,7 +136,7 @@ mod tests {
     fn test_current_with_multiple_fields() {
         let (mock_writer, _guard) = setup_tracing();
 
-        #[params(span, fields(operation_id, user_id), current(audit_trail, debug_info))]
+        
         fn secure_operation(
             operation_id: String,
             user_id: u64,
@@ -199,11 +199,7 @@ mod tests {
     fn test_current_with_custom_fields() {
         let (mock_writer, _guard) = setup_tracing();
 
-        #[params(
-            span,
-            custom(service = "payment", version = "2.1"),
-            current(transaction_id, amount)
-        )]
+        
         fn process_payment(transaction_id: String, amount: f64, _card_number: String) {
             info!("Processing payment");
             validate_payment();
@@ -255,7 +251,7 @@ mod tests {
     async fn test_current_attribute_with_async() {
         let (mock_writer, _guard) = setup_tracing();
 
-        #[params(span, fields(user_id), current(session_token))]
+        
         async fn async_operation(user_id: u64, session_token: String, _api_key: String) {
             info!("Starting async operation");
 

@@ -70,7 +70,6 @@ struct UserOperation {
 }
 
 /// Example 1: Basic parameter logging - logs all parameters automatically.
-#[params]
 fn basic_user_validation(user: User, validation_rules: Vec<String>) {
     info!("Starting basic user validation");
 
@@ -84,14 +83,6 @@ fn basic_user_validation(user: User, validation_rules: Vec<String>) {
 
 /// Example 2: Selective field logging - only logs safe, relevant fields.
 /// Excludes sensitive data like passwords and API keys.
-#[params(fields(
-    user.id,
-    user.username,
-    user.profile.first_name,
-    user.profile.preferences.theme,
-    operation_type,
-    include_sensitive
-))]
 fn update_user_profile(
     user: User,
     _new_email: String, // Not logged - could be sensitive during update
@@ -110,13 +101,6 @@ fn update_user_profile(
 }
 
 /// Example 3: Custom fields - adds static metadata to logs for service identification.
-#[params(custom(
-    service = "user-management",
-    version = "2.1.0",
-    environment = "production",
-    component = "authentication",
-    security_level = "high"
-))]
 fn authenticate_user_with_metadata(
     username: String,
     password_hash: String, // This parameter will be logged, but it's already hashed
@@ -139,12 +123,6 @@ fn authenticate_user_with_metadata(
 
 /// Example 4: Span context propagation - creates span and propagates to child functions.
 /// Only specified fields are propagated to maintain security.
-#[params(span, fields(
-    user.id,
-    user.username,
-    operation.operation_type,
-    operation.priority
-))]
 fn process_user_operation(
     user: User,
     operation: UserOperation,
@@ -178,22 +156,6 @@ fn log_operation_audit() {
 }
 
 /// Example 5: Combined attributes - span + custom + fields together.
-#[params(
-    span,
-    custom(
-        service = "payment-processor",
-        version = "3.0.1",
-        environment = "production",
-        compliance = "PCI-DSS"
-    ),
-    fields(
-        transaction_id,
-        amount,
-        currency,
-        user.id,
-        fraud_check_enabled
-    )
-)]
 fn process_payment_transaction(
     transaction_id: String,
     amount: f64,
@@ -230,20 +192,6 @@ fn send_receipt() {
 }
 
 /// Example 6: Async function with comprehensive logging.
-#[params(
-    span,
-    custom(
-        service = "notification-service",
-        version = "1.5.2",
-        async_enabled = true
-    ),
-    fields(
-        user.id,
-        user.profile.preferences.notifications_enabled,
-        notification_type,
-        priority
-    )
-)]
 async fn send_batch_notifications(
     user: User,
     notification_type: String,
@@ -280,18 +228,6 @@ async fn deliver_notifications() {
 }
 
 /// Example 7: Error handling with comprehensive logging.
-#[params(
-    fields(
-        operation_id,
-        user.id,
-        retry_count,
-        max_retries
-    ),
-    custom(
-        service = "data-processor",
-        error_handling = "comprehensive"
-    )
-)]
 fn process_data_with_error_handling(
     operation_id: String,
     user: User,
@@ -331,21 +267,7 @@ struct ServiceConfig {
 
 impl UserService {
     /// Comprehensive user management operation with all macro features.
-    #[params(
-        span,
-        custom(
-            service = "user-service",
-            version = "4.2.1",
-            method = "manage_user_lifecycle"
-        ),
-        fields(
-            user.id,
-            user.username,
-            operation_type,
-            self._service_config.cache_enabled,
-            self._service_config.timeout_seconds
-        )
-    )]
+    
     fn manage_user_lifecycle(
         &self,
         user: User,

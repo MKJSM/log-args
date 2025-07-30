@@ -4,6 +4,48 @@ use syn::parse::{Parse, Parser};
 use syn::punctuated::Punctuated;
 use syn::{parenthesized, Block, Expr, FnArg, Ident, ImplItemFn, ItemFn, MetaNameValue, Pat, Token};
 
+/// Attribute macro for adding structured logging to functions
+/// 
+/// This macro adds structured logging to functions by automatically injecting
+/// function parameters into log statements. It supports various options for
+/// controlling which parameters are logged and how context is propagated.
+///
+/// # Features
+/// - Automatic parameter logging
+/// - Custom field addition
+/// - Selective field logging
+/// - Context propagation via span
+/// - Function name logging with configurable casing styles
+///
+/// # Examples
+///
+/// Basic usage:
+/// ```
+/// #[params]
+/// fn authenticate(user_id: &str, password: &str) -> Result<(), Error> {
+///     info!("User authentication attempt");
+///     // The log will include user_id automatically
+///     // password is not logged for security
+/// }
+/// ```
+///
+/// With selective fields:
+/// ```
+/// #[params(fields(user_id, request_id))]
+/// fn process_request(user_id: &str, request_id: &str, _sensitive_data: &str) {
+///     info!("Processing request");
+///     // Only user_id and request_id will be logged
+/// }
+/// ```
+///
+/// With custom fields:
+/// ```
+/// #[params(custom(operation = "user_login", system = "auth_service"))]
+/// fn login(username: &str) {
+///     info!("User login attempt");
+///     // Logs will include the custom fields
+/// }
+/// ```
 #[proc_macro_attribute]
 pub fn params(args: TokenStream, input: TokenStream) -> TokenStream {
     let mut item = if let Ok(item_fn) = syn::parse::<syn::ItemFn>(input.clone()) {
@@ -49,7 +91,7 @@ pub fn params(args: TokenStream, input: TokenStream) -> TokenStream {
         quote! {
             let mut new_context_for_push = #get_parent_context;
             {
-                let mut map = ::std::collections::HashMap::new();
+                let mut map = ::std::collections::HashMap::<String, serde_json::Value>::new();
                 #(#local_fields_quote)*
                 new_context_for_push.extend(map.into_iter());
             }
@@ -64,8 +106,8 @@ pub fn params(args: TokenStream, input: TokenStream) -> TokenStream {
         {
             #push_logic
 
-            let local_fields = {
-                let mut map = ::std::collections::HashMap::new();
+            let local_fields: ::std::collections::HashMap<String, String> = {
+                let mut map = ::std::collections::HashMap::<String, serde_json::Value>::new();
                 #(#local_fields_quote)*
                 map
             };
@@ -78,14 +120,24 @@ pub fn params(args: TokenStream, input: TokenStream) -> TokenStream {
 
     *item.block_mut() = syn::parse2(new_block).expect("Failed to parse new block");
 
-    TokenStream::from(quote! { #item })
+    match item {
+        FnItem::Item(item_fn) => TokenStream::from(quote! { #item_fn }),
+        FnItem::ImplItem(impl_item_fn) => TokenStream::from(quote! { #impl_item_fn }),
+    }
 }
 
+/// Represents the different attribute options for the params macro
 enum Attribute {
+    /// Selectively log only specific fields
     Fields(Punctuated<Expr, Token![,]>),
+    /// Add custom fields to logs
     Custom(Punctuated<MetaNameValue, Token![,]>),
+    /// Enable context propagation to child functions
     Span,
+    /// Log all parameters
     All,
+    /// Mark fields that should only be logged in the current function
+    Current(Punctuated<Expr, Token![,]>),
 }
 
 impl Parse for Attribute {
@@ -103,25 +155,38 @@ impl Parse for Attribute {
             Ok(Attribute::Span)
         } else if ident == "all" {
             Ok(Attribute::All)
+        } else if ident == "current" {
+            let content;
+            parenthesized!(content in input);
+            Ok(Attribute::Current(Punctuated::parse_terminated(&content)?))
         } else {
             Err(syn::Error::new_spanned(ident, "unknown attribute"))
         }
     }
 }
 
+/// Configuration for the params macro
 struct AttrConfig {
+    /// Fields to selectively log
     fields: Vec<syn::Expr>,
+    /// Custom fields to add to logs
     custom: Vec<syn::MetaNameValue>,
+    /// Whether to enable context propagation
     span: bool,
+    /// Whether to log all parameters
     all_params: bool,
+    /// Fields that should only be logged in the current function
+    current: Vec<syn::Expr>,
 }
 
 impl AttrConfig {
     fn from_attributes(attrs: Punctuated<Attribute, Token![,]>) -> Self {
         let mut fields = Vec::new();
         let mut custom = Vec::new();
+        let mut current = Vec::new();
         let mut span = false;
         let mut all_params = false;
+        let attrs_is_empty = attrs.is_empty();
 
         for attr in attrs {
             match attr {
@@ -129,18 +194,20 @@ impl AttrConfig {
                 Attribute::Custom(c) => custom.extend(c.into_iter()),
                 Attribute::Span => span = true,
                 Attribute::All => all_params = true,
+                Attribute::Current(c) => current.extend(c.into_iter()),
             }
         }
 
-        // By default, span is true if no attributes are provided or only `all` is provided.
-        if fields.is_empty() && custom.is_empty() && !span {
+        // By default, span is true if no attributes are provided or only `all` is provided
+        if attrs_is_empty || (fields.is_empty() && custom.is_empty() && current.is_empty() && all_params) {
             span = true;
         }
 
-        Self { fields, custom, span, all_params }
+        Self { fields, custom, span, all_params, current }
     }
 }
 
+/// Represents either a standalone function or a method in an impl block
 enum FnItem {
     Item(ItemFn),
     ImplItem(ImplItemFn),
@@ -176,101 +243,7 @@ impl FnItem {
     }
 }
 
-enum Attribute {
-    Fields(Punctuated<Expr, Token![,]>),
-    Custom(Punctuated<MetaNameValue, Token![,]>),
-    Span,
-    All,
-}
-
-impl Parse for Attribute {
-    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
-        let ident: Ident = input.parse()?;
-        if ident == "fields" {
-            let content;
-            parenthesized!(content in input);
-            Ok(Attribute::Fields(Punctuated::parse_terminated(&content)?))
-        } else if ident == "custom" {
-            let content;
-            parenthesized!(content in input);
-            Ok(Attribute::Custom(Punctuated::parse_terminated(&content)?))
-        } else if ident == "span" {
-            Ok(Attribute::Span)
-        } else if ident == "all" {
-            Ok(Attribute::All)
-        } else {
-            Err(syn::Error::new_spanned(ident, "unknown attribute"))
-        }
-    }
-}
-
-struct AttrConfig {
-    fields: Vec<syn::Expr>,
-    custom: Vec<syn::MetaNameValue>,
-    span: bool,
-    all_params: bool,
-}
-
-impl AttrConfig {
-    fn from_attributes(attrs: Punctuated<Attribute, Token![,]>) -> Self {
-        let mut fields = Vec::new();
-        let mut custom = Vec::new();
-        let mut span = false;
-        let mut all_params = false;
-
-        for attr in attrs {
-            match attr {
-                Attribute::Fields(f) => fields.extend(f.into_iter()),
-                Attribute::Custom(c) => custom.extend(c.into_iter()),
-                Attribute::Span => span = true,
-                Attribute::All => all_params = true,
-            }
-        }
-
-        // By default, span is true if no attributes are provided or only `all` is provided.
-        if fields.is_empty() && custom.is_empty() && !span {
-            span = true;
-        }
-
-        Self { fields, custom, span, all_params }
-    }
-}
-
-enum FnItem {
-    Item(ItemFn),
-    ImplItem(ImplItemFn),
-}
-
-impl FnItem {
-    fn sig(&self) -> &syn::Signature {
-        match self {
-            FnItem::Item(item) => &item.sig,
-            FnItem::ImplItem(item) => &item.sig,
-        }
-    }
-
-    fn block(&self) -> &Block {
-        match self {
-            FnItem::Item(item) => &item.block,
-            FnItem::ImplItem(item) => &item.block,
-        }
-    }
-
-    fn block_mut(&mut self) -> &mut Block {
-        match self {
-            FnItem::Item(item) => &mut item.block,
-            FnItem::ImplItem(item) => &mut item.block,
-        }
-    }
-
-    fn attrs_mut(&mut self) -> &mut Vec<syn::Attribute> {
-        match self {
-            FnItem::Item(item) => &mut item.attrs,
-            FnItem::ImplItem(item) => &mut item.attrs,
-        }
-    }
-}
-
+/// Generates code to extract context fields from function parameters
 fn get_context_fields_quote(item: &FnItem, config: &AttrConfig) -> Vec<proc_macro2::TokenStream> {
     let mut fields_to_add = Vec::new();
 
@@ -281,13 +254,13 @@ fn get_context_fields_quote(item: &FnItem, config: &AttrConfig) -> Vec<proc_macr
         if cfg!(feature = "function-names-snake") {
             quote! { #fn_name_str.to_string() }
         } else if cfg!(feature = "function-names-camel") {
-            quote! { log_args_runtime::to_camel_case(#fn_name_str) }
+            quote! { ::log_args_runtime::to_camel_case(#fn_name_str) }
         } else if cfg!(feature = "function-names-pascal") {
-            quote! { log_args_runtime::to_pascal_case(#fn_name_str) }
+            quote! { ::log_args_runtime::to_pascal_case(#fn_name_str) }
         } else if cfg!(feature = "function-names-screaming") {
-            quote! { log_args_runtime::to_screaming_snake_case(#fn_name_str) }
+            quote! { ::log_args_runtime::to_screaming_snake_case(#fn_name_str) }
         } else if cfg!(feature = "function-names-kebab") {
-            quote! { log_args_runtime::to_kebab_case(#fn_name_str) }
+            quote! { ::log_args_runtime::to_kebab_case(#fn_name_str) }
         } else {
             quote! { #fn_name_str.to_string() } // Default to snake_case if no feature is set
         };
@@ -298,7 +271,7 @@ fn get_context_fields_quote(item: &FnItem, config: &AttrConfig) -> Vec<proc_macr
         });
     }
 
-    let log_all = config.all_params || (config.fields.is_empty() && !config.all_params);
+    let log_all = config.all_params || config.fields.is_empty();
 
     for arg in &item.sig().inputs {
         if let FnArg::Typed(pat_type) = arg {
@@ -310,6 +283,7 @@ fn get_context_fields_quote(item: &FnItem, config: &AttrConfig) -> Vec<proc_macr
                     continue;
                 }
 
+                // Check if this field should be logged
                 let should_log = if log_all {
                     true
                 } else {
@@ -319,118 +293,67 @@ fn get_context_fields_quote(item: &FnItem, config: &AttrConfig) -> Vec<proc_macr
                     })
                 };
 
-                if should_log {
+                // Check if this field is in the current-only list
+                let is_current_only = config.current.iter().any(|expr| {
+                    let expr_str = quote!(#expr).to_string();
+                    expr_str == ident_str
+                });
+
+                if should_log && !is_current_only {
                     fields_to_add.push(quote! {
-                        let value_str = serde_json::to_string(&#ident).unwrap_or_else(|_| "<unserializable>".to_string());
-                        map.insert(#ident_str.to_string(), value_str.trim_matches('"').to_string());
+                        match serde_json::to_string(&#ident) {
+                            Ok(value_str) => { map.insert(#ident_str.to_string(), value_str); },
+                            Err(_) => { map.insert(#ident_str.to_string(), "<unserializable>".to_string()); }
+                        }
                     });
                 }
             }
         }
     }
 
+    // Handle complex field expressions (like user.id)
     if !log_all {
         for expr in &config.fields {
             let expr_str = quote!(#expr).to_string().replace(' ', "");
             if expr_str.contains('.') {
                 fields_to_add.push(quote! {
-                    let value_str = serde_json::to_string(&#expr).unwrap_or_else(|_| "<unserializable>".to_string());
-                    map.insert(#expr_str.to_string(), value_str.trim_matches('"').to_string());
+                    match serde_json::to_string(&#expr) {
+                        Ok(value_str) => { map.insert(#expr_str.to_string(), value_str); },
+                        Err(_) => { map.insert(#expr_str.to_string(), "<unserializable>".to_string()); }
+                    }
                 });
             }
         }
     }
 
+    // Add custom fields
     for custom_field in &config.custom {
         let key = &custom_field.path;
         let value = &custom_field.value;
         let key_str = quote!(#key).to_string();
         fields_to_add.push(quote! {
-            let value_str = serde_json::to_string(&#value).unwrap_or_else(|_| "<unserializable>".to_string());
-            map.insert(#key_str.to_string(), value_str.trim_matches('"').to_string());
+            match serde_json::to_string(&#value) {
+                Ok(value_str) => { map.insert(#key_str.to_string(), value_str); },
+                Err(_) => { map.insert(#key_str.to_string(), "<unserializable>".to_string()); }
+            }
         });
     }
 
-    let fn_name = item.sig().ident.to_string();
-    let fn_name_str = fn_name.as_str();
-
-    let function_name_casing = 
-        if cfg!(feature = "function-names-snake") {
-            quote! { #fn_name_str.to_string() }
-        } else if cfg!(feature = "function-names-camel") {
-            quote! { log_args_runtime::to_camel_case(#fn_name_str) }
-        } else if cfg!(feature = "function-names-pascal") {
-            quote! { log_args_runtime::to_pascal_case(#fn_name_str) }
-        } else if cfg!(feature = "function-names-screaming") {
-            quote! { log_args_runtime::to_screaming_snake_case(#fn_name_str) }
-        } else if cfg!(feature = "function-names-kebab") {
-            quote! { log_args_runtime::to_kebab_case(#fn_name_str) }
-        } else {
-            quote! { #fn_name_str.to_string() } // Default to snake_case if no feature is set
-        };
-
-    if cfg!(any(feature = "function-names-snake", feature = "function-names-camel", feature = "function-names-pascal", feature = "function-names-screaming", feature = "function-names-kebab")) {
+    // Add current-only fields
+    for current_field in &config.current {
+        let current_str = quote!(#current_field).to_string();
         fields_to_add.push(quote! {
-            map.insert("function".to_string(), #function_name_casing);
-        });
-    }
-
-    let log_all = config.all_params || (config.fields.is_empty() && !config.all_params);
-
-    for arg in &item.sig().inputs {
-        if let FnArg::Typed(pat_type) = arg {
-            if let Pat::Ident(pat_ident) = &*pat_type.pat {
-                let ident = &pat_ident.ident;
-                let ident_str = ident.to_string();
-
-                if ident_str == "self" {
-                    continue;
-                }
-
-                let should_log = if log_all {
-                    true
-                } else {
-                    config.fields.iter().any(|expr| {
-                        let expr_str = quote!(#expr).to_string();
-                        expr_str == ident_str
-                    })
-                };
-
-                if should_log {
-                    fields_to_add.push(quote! {
-                        let value_str = serde_json::to_string(&#ident).unwrap_or_else(|_| "<unserializable>".to_string());
-                        map.insert(#ident_str.to_string(), value_str.trim_matches('"').to_string());
-                    });
-                }
+            match serde_json::to_string(&#current_field) {
+                Ok(value_str) => { map.insert(#current_str.to_string(), value_str); },
+                Err(_) => { map.insert(#current_str.to_string(), "<unserializable>".to_string()); }
             }
-        }
-    }
-
-    if !log_all {
-        for expr in &config.fields {
-            let expr_str = quote!(#expr).to_string().replace(' ', "");
-            if expr_str.contains('.') {
-                fields_to_add.push(quote! {
-                    let value_str = serde_json::to_string(&#expr).unwrap_or_else(|_| "<unserializable>".to_string());
-                    map.insert(#expr_str.to_string(), value_str.trim_matches('"').to_string());
-                });
-            }
-        }
-    }
-
-    for custom_field in &config.custom {
-        let key = &custom_field.path;
-        let value = &custom_field.value;
-        let key_str = quote!(#key).to_string();
-        fields_to_add.push(quote! {
-            let value_str = serde_json::to_string(&#value).unwrap_or_else(|_| "<unserializable>".to_string());
-            map.insert(#key_str.to_string(), value_str.trim_matches('"').to_string());
         });
     }
 
     fields_to_add
 }
 
+/// Generates macro redefinitions that inject context fields into log statements
 fn get_log_redefines_with_fields(is_async: bool, span_enabled: bool) -> proc_macro2::TokenStream {
     let get_parent_context_logic = if span_enabled {
         if is_async {
@@ -439,43 +362,221 @@ fn get_log_redefines_with_fields(is_async: bool, span_enabled: bool) -> proc_mac
             quote! { ::log_args_runtime::get_context() }
         }
     } else {
-        quote! { ::std::collections::HashMap::new() }
+        quote! { ::std::collections::HashMap::<String, String>::new() }
     };
 
     quote! {
+        // Override tracing macros with our own versions that include context fields
+        use tracing::{info, warn, error, debug, trace};
+
+        // Redefine macros to include context fields
         macro_rules! info {
-            ($($t:tt)*) => {
+            ($msg:expr) => {
                 let mut all_fields = #get_parent_context_logic;
                 all_fields.extend(local_fields.clone());
-                ::tracing::info!(..all_fields, $($t)*)
+                match all_fields.len() {
+                    0 => tracing::info!($msg),
+                    1 => {
+                        let mut iter = all_fields.iter();
+                        if let Some((k1, v1)) = iter.next() {
+                            tracing::info!($msg, %k1 = ?v1)
+                        } else {
+                            tracing::info!($msg)
+                        }
+                    },
+                    2 => {
+                        let mut iter = all_fields.iter();
+                        if let (Some((k1, v1)), Some((k2, v2))) = (iter.next(), iter.next()) {
+                            tracing::info!($msg, %k1 = ?v1, %k2 = ?v2)
+                        } else {
+                            tracing::info!($msg)
+                        }
+                    },
+                    3 => {
+                        let mut iter = all_fields.iter();
+                        if let (Some((k1, v1)), Some((k2, v2)), Some((k3, v3))) = (iter.next(), iter.next(), iter.next()) {
+                            tracing::info!($msg, %k1 = ?v1, %k2 = ?v2, %k3 = ?v3)
+                        } else {
+                            tracing::info!($msg)
+                        }
+                    },
+                    _ => {
+                        // For more than 3 fields, include them as a single fields object
+                        tracing::info!($msg, fields = ?all_fields)
+                    }
+                }
+            };
+            ($($args:tt)*) => {
+                // For more complex macro invocations, fall back to the original behavior
+                tracing::info!($($args)*)
             };
         }
+
         macro_rules! warn {
-            ($($t:tt)*) => {
+            ($msg:expr) => {
                 let mut all_fields = #get_parent_context_logic;
                 all_fields.extend(local_fields.clone());
-                ::tracing::warn!(..all_fields, $($t)*)
+                match all_fields.len() {
+                    0 => tracing::warn!($msg),
+                    1 => {
+                        let mut iter = all_fields.iter();
+                        if let Some((k1, v1)) = iter.next() {
+                            tracing::warn!($msg, %k1 = ?v1)
+                        } else {
+                            tracing::warn!($msg)
+                        }
+                    },
+                    2 => {
+                        let mut iter = all_fields.iter();
+                        if let (Some((k1, v1)), Some((k2, v2))) = (iter.next(), iter.next()) {
+                            tracing::warn!($msg, %k1 = ?v1, %k2 = ?v2)
+                        } else {
+                            tracing::warn!($msg)
+                        }
+                    },
+                    3 => {
+                        let mut iter = all_fields.iter();
+                        if let (Some((k1, v1)), Some((k2, v2)), Some((k3, v3))) = (iter.next(), iter.next(), iter.next()) {
+                            tracing::warn!($msg, %k1 = ?v1, %k2 = ?v2, %k3 = ?v3)
+                        } else {
+                            tracing::warn!($msg)
+                        }
+                    },
+                    _ => {
+                        // For more than 3 fields, include them as a single fields object
+                        tracing::warn!($msg, fields = ?all_fields)
+                    }
+                }
+            };
+            ($($args:tt)*) => {
+                // For more complex macro invocations, fall back to the original behavior
+                tracing::warn!($($args)*)
             };
         }
+
         macro_rules! error {
-            ($($t:tt)*) => {
+            ($msg:expr) => {
                 let mut all_fields = #get_parent_context_logic;
                 all_fields.extend(local_fields.clone());
-                ::tracing::error!(..all_fields, $($t)*)
+                match all_fields.len() {
+                    0 => tracing::error!($msg),
+                    1 => {
+                        let mut iter = all_fields.iter();
+                        if let Some((k1, v1)) = iter.next() {
+                            tracing::error!($msg, %k1 = ?v1)
+                        } else {
+                            tracing::error!($msg)
+                        }
+                    },
+                    2 => {
+                        let mut iter = all_fields.iter();
+                        if let (Some((k1, v1)), Some((k2, v2))) = (iter.next(), iter.next()) {
+                            tracing::error!($msg, %k1 = ?v1, %k2 = ?v2)
+                        } else {
+                            tracing::error!($msg)
+                        }
+                    },
+                    3 => {
+                        let mut iter = all_fields.iter();
+                        if let (Some((k1, v1)), Some((k2, v2)), Some((k3, v3))) = (iter.next(), iter.next(), iter.next()) {
+                            tracing::error!($msg, %k1 = ?v1, %k2 = ?v2, %k3 = ?v3)
+                        } else {
+                            tracing::error!($msg)
+                        }
+                    },
+                    _ => {
+                        // For more than 3 fields, include them as a single fields object
+                        tracing::error!($msg, fields = ?all_fields)
+                    }
+                }
+            };
+            ($($args:tt)*) => {
+                // For more complex macro invocations, fall back to the original behavior
+                tracing::error!($($args)*)
             };
         }
+
         macro_rules! debug {
-            ($($t:tt)*) => {
+            ($msg:expr) => {
                 let mut all_fields = #get_parent_context_logic;
                 all_fields.extend(local_fields.clone());
-                ::tracing::debug!(..all_fields, $($t)*)
+                match all_fields.len() {
+                    0 => tracing::debug!($msg),
+                    1 => {
+                        let mut iter = all_fields.iter();
+                        if let Some((k1, v1)) = iter.next() {
+                            tracing::debug!($msg, %k1 = ?v1)
+                        } else {
+                            tracing::debug!($msg)
+                        }
+                    },
+                    2 => {
+                        let mut iter = all_fields.iter();
+                        if let (Some((k1, v1)), Some((k2, v2))) = (iter.next(), iter.next()) {
+                            tracing::debug!($msg, %k1 = ?v1, %k2 = ?v2)
+                        } else {
+                            tracing::debug!($msg)
+                        }
+                    },
+                    3 => {
+                        let mut iter = all_fields.iter();
+                        if let (Some((k1, v1)), Some((k2, v2)), Some((k3, v3))) = (iter.next(), iter.next(), iter.next()) {
+                            tracing::debug!($msg, %k1 = ?v1, %k2 = ?v2, %k3 = ?v3)
+                        } else {
+                            tracing::debug!($msg)
+                        }
+                    },
+                    _ => {
+                        // For more than 3 fields, include them as a single fields object
+                        tracing::debug!($msg, fields = ?all_fields)
+                    }
+                }
+            };
+            ($($args:tt)*) => {
+                // For more complex macro invocations, fall back to the original behavior
+                tracing::debug!($($args)*)
             };
         }
+
         macro_rules! trace {
-            ($($t:tt)*) => {
+            ($msg:expr) => {
                 let mut all_fields = #get_parent_context_logic;
                 all_fields.extend(local_fields.clone());
-                ::tracing::trace!(..all_fields, $($t)*)
+                match all_fields.len() {
+                    0 => tracing::trace!($msg),
+                    1 => {
+                        let mut iter = all_fields.iter();
+                        if let Some((k1, v1)) = iter.next() {
+                            tracing::trace!($msg, %k1 = ?v1)
+                        } else {
+                            tracing::trace!($msg)
+                        }
+                    },
+                    2 => {
+                        let mut iter = all_fields.iter();
+                        if let (Some((k1, v1)), Some((k2, v2))) = (iter.next(), iter.next()) {
+                            tracing::trace!($msg, %k1 = ?v1, %k2 = ?v2)
+                        } else {
+                            tracing::trace!($msg)
+                        }
+                    },
+                    3 => {
+                        let mut iter = all_fields.iter();
+                        if let (Some((k1, v1)), Some((k2, v2)), Some((k3, v3))) = (iter.next(), iter.next(), iter.next()) {
+                            tracing::trace!($msg, %k1 = ?v1, %k2 = ?v2, %k3 = ?v3)
+                        } else {
+                            tracing::trace!($msg)
+                        }
+                    },
+                    _ => {
+                        // For more than 3 fields, include them as a single fields object
+                        tracing::trace!($msg, fields = ?all_fields)
+                    }
+                }
+            };
+            ($($args:tt)*) => {
+                // For more complex macro invocations, fall back to the original behavior
+                tracing::trace!($($args)*)
             };
         }
     }
@@ -538,193 +639,4 @@ fn to_screaming_snake_case(snake_case: &str) -> String {
 #[cfg(feature = "function-names-kebab")]
 fn to_kebab_case(snake_case: &str) -> String {
     snake_case.replace('_', "-")
-}
-
-fn get_context_map_for_span(item: &FnItem, config: &AttrConfig) -> proc_macro2::TokenStream {
-    let mut fields_to_log = vec![];
-
-    // Store all field types in span context for dynamic lookup
-    // This ensures that span context lookup works for ALL field types
-    
-    // 1. Add all parameters if requested
-    if config.all_params {
-        let all_args = get_all_args(item);
-        for ident in all_args {
-            let ident_str = ident.to_string();
-            fields_to_log.push(quote! {
-                new_context.insert(#ident_str.to_string(), format!("{:?}", #ident));
-            });
-        }
-    }
-    
-    // 2. Add explicitly specified fields
-    if !config.fields.is_empty() {
-        for field_expr in &config.fields {
-            let key_str = quote!(#field_expr).to_string().replace(' ', "");
-            fields_to_log.push(quote! {
-                new_context.insert(#key_str.to_string(), format!("{:?}", &#field_expr));
-            });
-        }
-    }
-    
-    // 3. Add custom fields (always included)
-    for nv in &config.custom {
-        let key = &nv.path;
-        let value = &nv.value;
-        let key_str = quote!(#key).to_string().replace(' ', "");
-        
-        // For span context, use the original expression directly
-        // This will be evaluated before any moves happen
-        fields_to_log.push(quote! {
-            new_context.insert(key_str.to_string(), format!("{:?}", #value).trim_matches('"').to_string());
-        });
-        
-        // Also store globally for cross-boundary persistence
-        fields_to_log.push(quote! {
-            ::log_args_runtime::set_global_context(&#key_str, &format!("{}", #value));
-        });
-    }
-    
-    // 4. Add current fields (these are also stored in context for consistency)
-    for current_field in &config.current {
-        let field_name = quote! { #current_field }.to_string();
-        let field_key = field_name.replace(' ', "");
-        fields_to_log.push(quote! {
-            new_context.insert(#field_key.to_string(), format!("{:?}", #current_field));
-        });
-    }
-
-    // Add function name to context if any function-names feature is enabled (always propagated)
-    #[cfg(any(
-        feature = "function-names-snake",
-        feature = "function-names-camel",
-        feature = "function-names-pascal",
-        feature = "function-names-screaming",
-        feature = "function-names-kebab"
-    ))]
-    {
-        let function_name = get_function_name(item);
-        fields_to_log.push(quote! {
-            new_context.insert("function".to_string(), #function_name.to_string());
-        });
-    }
-
-    quote! {
-        {
-            let mut new_context = ::std::collections::HashMap::new();
-            #(#fields_to_log)*
-            new_context
-        }
-    }
-}
-
-fn get_all_args(item: &FnItem) -> Vec<Ident> {
-    item.sig()
-        .inputs
-        .iter()
-        .filter_map(|arg| {
-            if let FnArg::Typed(pt) = arg {
-                if let Pat::Ident(pi) = &*pt.pat {
-                    if pi.ident != "self" {
-                        return Some(pi.ident.clone());
-                    }
-                }
-            }
-            None
-        })
-        .collect()
-}
-
-enum FnItem {
-    Item(syn::ItemFn),
-    ImplItem(syn::ImplItemFn),
-}
-
-impl quote::ToTokens for FnItem {
-    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
-        match self {
-            FnItem::Item(i) => i.to_tokens(tokens),
-            FnItem::ImplItem(i) => i.to_tokens(tokens),
-        }
-    }
-}
-
-impl FnItem {
-    fn attrs_mut(&mut self) -> &mut Vec<syn::Attribute> {
-        match self {
-            FnItem::Item(item_fn) => &mut item_fn.attrs,
-            FnItem::ImplItem(impl_item_fn) => &mut impl_item_fn.attrs,
-        }
-    }
-
-    fn sig(&self) -> &syn::Signature {
-        match self {
-            FnItem::Item(i) => &i.sig,
-            FnItem::ImplItem(i) => &i.sig,
-        }
-    }
-
-    fn block(&self) -> &syn::Block {
-        match self {
-            FnItem::Item(i) => &i.block,
-            FnItem::ImplItem(i) => &i.block,
-        }
-    }
-
-    fn block_mut(&mut self) -> &mut syn::Block {
-        match self {
-            FnItem::Item(i) => &mut i.block,
-            FnItem::ImplItem(i) => &mut i.block,
-        }
-    }
-}
-
-fn get_log_redefines_with_fields(is_async: bool, span_enabled: bool) -> proc_macro2::TokenStream {
-    let get_parent_context_logic = if span_enabled {
-        if is_async {
-            quote! { ::log_args_runtime::get_async_context() }
-        } else {
-            quote! { ::log_args_runtime::get_context() }
-        }
-    } else {
-        quote! { ::std::collections::HashMap::new() }
-    };
-
-    quote! {
-        macro_rules! info {
-            ($($t:tt)*) => {
-                let mut all_fields = #get_parent_context_logic;
-                all_fields.extend(local_fields.clone());
-                ::tracing::info!(..all_fields, $($t)*)
-            };
-        }
-        macro_rules! warn {
-            ($($t:tt)*) => {
-                let mut all_fields = #get_parent_context_logic;
-                all_fields.extend(local_fields.clone());
-                ::tracing::warn!(..all_fields, $($t)*)
-            };
-        }
-        macro_rules! error {
-            ($($t:tt)*) => {
-                let mut all_fields = #get_parent_context_logic;
-                all_fields.extend(local_fields.clone());
-                ::tracing::error!(..all_fields, $($t)*)
-            };
-        }
-        macro_rules! debug {
-            ($($t:tt)*) => {
-                let mut all_fields = #get_parent_context_logic;
-                all_fields.extend(local_fields.clone());
-                ::tracing::debug!(..all_fields, $($t)*)
-            };
-        }
-        macro_rules! trace {
-            ($($t:tt)*) => {
-                let mut all_fields = #get_parent_context_logic;
-                all_fields.extend(local_fields.clone());
-                ::tracing::trace!(..all_fields, $($t)*)
-            };
-        }
-    }
 }

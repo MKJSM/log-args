@@ -48,7 +48,6 @@ When a parent function uses `#[params(span, custom(...))]`, the custom field val
 ```rust
 // Parent sets multiple context fields
 #[params(span, custom(
-    company_id = auth_user.company_id.clone(),
     user_id = auth_user.user_id.clone(),
     session_id = session.id.clone()
 ))]
@@ -59,7 +58,7 @@ pub async fn complex_handler(auth_user: AuthUser, session: Session) {
     child_operation().await;
 }
 
-#[params]  // ← Inherits company_id, user_id, AND session_id
+#[params]  // ← Inherits user_id, AND session_id
 async fn child_operation() {
     info!("Child operation");
     // Output will include all three context fields!
@@ -68,47 +67,8 @@ async fn child_operation() {
 
 **Output:**
 ```json
-{"message":"Complex operation started","company_id":"123","user_id":"456","session_id":"789"}
-{"message":"Child operation","context":"company_id=123,user_id=456,session_id=789"}
-```
-
-### Migration from Manual Context Handling
-
-**Before (Manual):**
-```rust
-// Old way - lots of manual work
-#[params(span, custom(company_id = auth_user.company_id))]
-pub async fn ws_handler(...) {
-    ws.on_upgrade(with_context_capture1(move |socket| {  // ← Manual helper needed
-        let client = SyncWSClient::new_with_context(     // ← Manual context passing
-            db, company_id, client_id, 
-            get_current_context()                        // ← Manual context retrieval
-        );
-        client.run(socket, broker)
-    }))
-}
-
-#[params(custom(company_id = context.get("company_id")))]  // ← Manual context extraction
-fn new_with_context(db: Arc<DBManager>, company_id: String, client_id: String, context: Context) -> Self {
-    // Manual context handling everywhere
-}
-```
-
-**After (Automatic):**
-```rust
-// New way - completely automatic!
-#[params(span, custom(company_id = auth_user.company_id))]
-pub async fn ws_handler(...) {
-    ws.on_upgrade(move |socket| {                        // ← No helper needed
-        let client = SyncWSClient::new(db, company_id, client_id);  // ← Normal constructor
-        client.run(socket, broker)                       // ← Just works!
-    })
-}
-
-#[params]  // ← Just this! Context inherited automatically
-fn new(db: Arc<DBManager>, company_id: String, client_id: String) -> Self {
-    // Zero manual context handling needed
-}
+{"message":"Complex operation started","user_id":"456","session_id":"789"}
+{"message":"Child operation","context":"user_id=456,session_id=789"}
 ```
 
 ## Basic Usage

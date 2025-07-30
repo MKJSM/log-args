@@ -39,26 +39,18 @@ struct DatabaseConfig {
 
 /// Handles API requests with service metadata in logs.
 /// Custom fields provide consistent context across all log entries.
-#[params(custom(service = "user-api", version = "1.2.3", environment = "production"))]
 fn handle_api_request(_request: ApiRequest) {
     info!("Processing API request");
     info!("Request completed successfully");
 }
 
 /// Connects to database with operational context.
-#[params(custom(
-    component = "database",
-    operation_type = "connection",
-    retry_enabled = true,
-    timeout_ms = 5000
-))]
 fn connect_to_database(_config: DatabaseConfig) {
     info!("Attempting database connection");
     info!("Database connection established");
 }
 
 /// Sends notifications with module and priority context.
-#[params(custom(module = "notification", priority = "high", channel = "email"))]
 async fn send_notification(_user_id: u64, _message: String) {
     info!("Preparing notification");
 
@@ -73,12 +65,7 @@ struct PaymentProcessor;
 
 impl PaymentProcessor {
     /// Processes payments with payment gateway context.
-    #[params(custom(
-        service = "payment-gateway",
-        provider = "stripe",
-        currency = "USD",
-        secure = true
-    ))]
+    
     fn process_payment(&self, _amount: f64, _card_token: String) {
         info!("Processing payment");
         info!("Payment processed successfully");

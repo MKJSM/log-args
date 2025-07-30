@@ -39,7 +39,6 @@ struct Config {
 
 /// Debug function that logs all parameters explicitly.
 /// The `all` attribute ensures all parameters are logged.
-#[params(all)]
 fn debug_user_operation(user: User, config: Config, operation_id: String) {
     info!("Starting debug operation");
 
@@ -50,7 +49,6 @@ fn debug_user_operation(user: User, config: Config, operation_id: String) {
 }
 
 /// Async function with all parameters logging.
-#[params(all)]
 async fn async_debug_operation(user_id: u64, data: String, metadata: Vec<String>) {
     info!("Starting async debug operation");
 
@@ -62,7 +60,6 @@ async fn async_debug_operation(user_id: u64, data: String, metadata: Vec<String>
 
 /// Function combining `all` with custom fields.
 /// This logs all parameters AND adds custom metadata.
-#[params(all, custom(service = "debug-service", level = "verbose"))]
 fn comprehensive_debug(user: User, request_data: String, flags: Vec<bool>) {
     info!("Starting comprehensive debug");
 
@@ -74,7 +71,6 @@ fn comprehensive_debug(user: User, request_data: String, flags: Vec<bool>) {
 
 /// Function with selective fields despite having many parameters.
 /// This shows how `fields()` overrides the default behavior.
-#[params(fields(user.id, operation_type))]
 fn selective_logging(
     user: User,
     operation_type: String,

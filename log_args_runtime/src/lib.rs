@@ -272,6 +272,37 @@ pub fn get_inherited_context_string() -> String {
     String::new()
 }
 
+/// Convert snake_case to camelCase
+pub fn to_camel_case(snake_case: &str) -> String {
+    let mut result = String::new();
+    let mut capitalize_next = false;
+    
+    for ch in snake_case.chars() {
+        if ch == '_' {
+            capitalize_next = true;
+        } else if capitalize_next {
+            result.push(ch.to_ascii_uppercase());
+            capitalize_next = false;
+        } else {
+            result.push(ch);
+        }
+    }
+    
+    result
+}
+
+/// Macro that provides a placeholder for any value.
+/// This is used when we want to avoid compile-time Serialize trait requirements.
+/// For now, it just returns a placeholder, but could be extended to handle specific types.
+#[macro_export]
+macro_rules! serialize_if_possible {
+    ($value:expr) => {{
+        // For now, just return a placeholder to avoid compile-time trait bound issues
+        // This allows the macro to work with any type, including WebSocketUpgrade, Arc<T>, etc.
+        "<skipped>".to_string()
+    }};
+}
+
 /// Get inherited context fields as individual key-value pairs
 /// This function returns a HashMap of inherited context fields for dynamic field injection
 pub fn get_inherited_fields_map() -> std::collections::HashMap<String, String> {

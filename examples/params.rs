@@ -75,7 +75,7 @@ async fn fetch_user_profile(user_id: u64, _include_settings: bool) {
 #[params(all)]
 fn process_payment(user_id: u64, amount: f64, currency: String) {
     info!("Processing payment");
-    
+
     // Payment processing logic here
     info!("Payment processed successfully");
 }

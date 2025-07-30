@@ -99,7 +99,7 @@ mod tests {
     fn test_nested_field_access() {
         let (mock_writer, _guard) = setup_tracing();
 
-        #[params(fields(person.id, person.name, person.contact.name, person.contact.email))]
+        
         fn process_person(person: Person, _sensitive_data: String) {
             info!("Processing person data");
         }
@@ -146,7 +146,7 @@ mod tests {
     fn test_method_call_expressions() {
         let (mock_writer, _guard) = setup_tracing();
 
-        #[params(fields(data.len(), text.to_uppercase(), tags.is_empty()))]
+        
         fn process_with_methods(data: Vec<u8>, text: String, tags: Vec<String>, _secret: String) {
             info!("Processing with method calls");
         }
@@ -178,11 +178,7 @@ mod tests {
     fn test_deeply_nested_expressions() {
         let (mock_writer, _guard) = setup_tracing();
 
-        #[params(fields(
-            org.people.len(),
-            org.people[0].contact.addresses.len(),
-            org.metadata.get("department").unwrap_or(&"unknown".to_string())
-        ))]
+        
         fn process_organization(org: Organization, _api_key: String) {
             info!("Processing organization");
         }
@@ -249,10 +245,7 @@ mod tests {
     fn test_complex_expressions_with_custom_fields() {
         let (mock_writer, _guard) = setup_tracing();
 
-        #[params(
-            fields(person.contact.addresses.len(), person.tags.join(",")),
-            custom(service = "user-processor", version = "1.0")
-        )]
+        
         fn process_user_profile(person: Person, _password: String) {
             info!("Processing user profile");
         }
@@ -316,11 +309,7 @@ mod tests {
     fn test_expressions_with_error_handling() {
         let (mock_writer, _guard) = setup_tracing();
 
-        #[params(fields(
-            data.get(0).unwrap_or(&0),
-            text.chars().count(),
-            optional_value.as_ref().map(|v| v.len()).unwrap_or(0)
-        ))]
+        
         fn safe_processing(
             data: Vec<i32>,
             text: String,

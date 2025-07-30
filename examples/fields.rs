@@ -58,7 +58,6 @@ struct ApiKey {
 
 /// Authenticates user with selective field logging.
 /// Only logs safe user fields, excludes sensitive API key data.
-#[params(fields(user.id, user.username, user.email, remember_me))]
 fn authenticate_user(user: User, _api_key: ApiKey, remember_me: bool) {
     info!("Starting user authentication");
     info!("User authentication completed");
@@ -66,13 +65,6 @@ fn authenticate_user(user: User, _api_key: ApiKey, remember_me: bool) {
 
 /// Updates user profile with deep nested field access.
 /// Logs specific profile fields while excluding sensitive password.
-#[params(fields(
-    user.id,
-    user.profile.first_name,
-    user.profile.last_name,
-    user.profile.preferences.theme,
-    user.profile.preferences.language
-))]
 fn update_user_profile(user: User, _new_email: String, _password: String) {
     info!("Updating user profile");
     info!("User profile updated successfully");
@@ -80,18 +72,12 @@ fn update_user_profile(user: User, _new_email: String, _password: String) {
 
 /// Processes user batch with method calls and expressions.
 /// Demonstrates logging collection length and selective config fields.
-#[params(fields(
-    users.len(),
-    batch_size,
-    max_retries
-))]
 fn process_user_batch(users: Vec<User>, batch_size: usize, max_retries: u32) {
     info!("Starting batch user processing");
     info!("Batch processing completed");
 }
 
 /// Sends notifications with selective async logging.
-#[params(fields(user_id, notification_type, priority))]
 async fn send_user_notification(
     user_id: u64,
     notification_type: String,
@@ -108,11 +94,6 @@ async fn send_user_notification(
 
 /// Processes complex data with advanced expressions.
 /// Shows complex field expressions and method calls.
-#[params(fields(
-    user.profile.preferences.notifications_enabled,
-    settings.len(),
-    tags.len()
-))]
 fn process_complex_data(
     user: User,
     settings: HashMap<String, String>,
@@ -131,7 +112,7 @@ struct UserService {
 
 impl UserService {
     /// Gets user data with selective field logging.
-    #[params(fields(user_id, include_sensitive))]
+    
     fn get_user_data(&self, user_id: u64, include_sensitive: bool, _admin_token: String) {
         info!("Fetching user data");
         info!("User data retrieved successfully");
